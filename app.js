@@ -4,7 +4,8 @@
   const $ = id => document.getElementById(id);
   const WARN_AT = 0.8;
   const KEY = 'spending-ledger-app-v1';
-  const APP_VERSION = '3';
+  const APP_VERSION = '4';
+  const SNAP_KEY = 'spending-ledger-safety-copy';
   const SW = ['--c1', '--c2', '--c3', '--c4', '--c5', '--c6', '--c7', '--c8'];
   const GROUPS = ['Cash', 'Bank account', 'Mobile money', 'Card', 'Savings', 'Loan', 'Other'];
   const CURRENCIES = [['USD', 'US dollar'], ['GHS', 'Ghana cedi'], ['NGN', 'Nigerian naira'], ['KES', 'Kenyan shilling'], ['ZAR', 'South African rand'], ['XOF', 'CFA franc (BCEAO)'], ['GBP', 'British pound'], ['EUR', 'Euro'], ['CAD', 'Canadian dollar'], ['INR', 'Indian rupee']];
@@ -59,6 +60,14 @@
   }
   let data;
   try { data = normalize(JSON.parse(lsGet(KEY)) || fresh()); } catch { data = fresh(); }
+  // Before a new version runs for the first time, keep a safety copy of the data it found.
+  let justUpdated = false, pendingWhatsNew = false;
+  if (data.appVersion !== APP_VERSION) {
+    const raw = lsGet(KEY);
+    if (raw && data.onboarded) { lsSet(SNAP_KEY, JSON.stringify({ from: data.appVersion || '3 or earlier', at: Date.now(), raw })); justUpdated = true; }
+    data.appVersion = APP_VERSION;
+    lsSet(KEY, JSON.stringify(data));
+  }
   let persistAsked = false;
   function save() {
     if (!lsSet(KEY, JSON.stringify(data))) toast("Couldn't save on this device. Storage may be full or blocked.", 'over');
@@ -154,16 +163,76 @@
     document.querySelectorAll('#bottomNav button').forEach(b => b.setAttribute('aria-current', b.dataset.tab === ui.tab ? 'page' : 'false'));
     const st = $('subtabs'); st.replaceChildren();
     (SUBS[ui.tab] || []).forEach(([k, label]) => st.append(el('button', { type: 'button', 'aria-pressed': String(sub === k), text: label, onclick: () => { ui.sub[ui.tab] = k; render(); } })));
-    $('period').hidden = !(ui.tab === 'trans' || (ui.tab === 'stats' && sub === 'categories'));
+    const heroOn = ui.tab === 'trans' && sub !== 'monthly';
+    $('period').hidden = !((ui.tab === 'trans' && !heroOn) || (ui.tab === 'stats' && sub === 'categories'));
     const list = yearView ? data.txs.filter(t => t.month.startsWith(ui.month.slice(0, 4))) : monthTxs();
     const t = totals(list);
-    $('pInc').textContent = money(t.inc); $('pExp').textContent = money(t.exp); $('pTot').textContent = money(t.tot);
+    $('pInc').dataset.cents = t.inc; $('pExp').dataset.cents = t.exp; $('pTot').dataset.cents = t.tot;
+    countUp($('period'));
+    renderHero(heroOn);
     $('fab').hidden = ui.tab === 'more';
+    $('fab').classList.toggle('pulse', !data.txs.length && data.onboarded);
     renderAlerts(); renderBanner();
     const view = ui.tab === 'trans' ? { daily: viewDaily, calendar: viewCalendar, monthly: viewMonthly }[sub]()
       : ui.tab === 'stats' ? (sub === 'insights' ? viewInsights() : viewStats())
       : ui.tab === 'budget' ? viewBudget() : ui.tab === 'goals' ? viewGoals() : viewMore();
-    $('main').replaceChildren(view);
+    const main = $('main'); main.replaceChildren(view);
+    const key = `${ui.tab}:${sub || ''}:${ui.month}`;
+    if (key !== lastViewKey) {
+      lastViewKey = key;
+      main.classList.remove('enter'); void main.offsetWidth; main.classList.add('enter');
+      [...(view.classList.contains('stack') ? view.children : [view])].slice(0, 12).forEach((c, i) => c.style.setProperty('--i', i));
+    }
+  }
+  let lastViewKey = '';
+
+  /* ---------- lively bits: counting numbers, summary card, bursts ---------- */
+  const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
+  const shown = new Map();
+  function countUp(root) {
+    root.querySelectorAll('[data-cents]').forEach(node => {
+      const key = node.id || node.dataset.k, to = +node.dataset.cents, from = shown.has(key) ? shown.get(key) : 0;
+      shown.set(key, to);
+      node.classList.toggle('neg', node.dataset.signed === '1' && to < 0);
+      if (reduceMotion.matches || from === to) { node.textContent = money(to); return; }
+      const t0 = performance.now(), dur = 650;
+      const tick = now => {
+        const p = Math.min(1, (now - t0) / dur), e = 1 - Math.pow(1 - p, 3);
+        node.textContent = money(Math.round(from + (to - from) * e));
+        if (p < 1 && node.isConnected) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    });
+  }
+  function renderHero(show) {
+    const h = $('hero'); h.hidden = !show; if (!show) return;
+    const mt = monthTxs(), t = totals(mt), isCur = ui.month === monthOf(todayISO());
+    const capped = data.categories.filter(c => c.limitCents != null);
+    const budget = capped.reduce((s, c) => s + c.limitCents, 0), used = capped.reduce((s, c) => s + spentIn(mt, c.id), 0);
+    const hr = new Date().getHours(), greet = hr < 12 ? 'Good morning' : hr < 17 ? 'Good afternoon' : 'Good evening';
+    const today = data.txs.reduce((s, x) => s + (x.type === 'expense' && x.date === todayISO() ? x.amountCents : 0), 0);
+    const pct = budget ? Math.min(100, used / budget * 100) : null;
+    h.replaceChildren(...[
+      el('div', { class: 'hero-top' }, el('span', { class: 'hero-greet', text: isCur ? greet : monthName(ui.month) }), isCur ? el('span', { class: 'hero-chip num', text: `Today ${money(today)}` }) : null),
+      el('div', { class: 'hero-label', text: budget ? 'Left to spend this month' : 'Net this month' }),
+      el('div', { class: 'hero-big num', 'data-k': 'heroBig', 'data-cents': budget ? budget - used : t.tot, 'data-signed': '1' }),
+      el('div', { class: 'hero-row' },
+        el('span', {}, el('i', { class: 'arrow', text: '↑' }), 'In ', el('b', { class: 'num', 'data-k': 'heroInc', 'data-cents': t.inc })),
+        el('span', {}, el('i', { class: 'arrow', text: '↓' }), 'Out ', el('b', { class: 'num', 'data-k': 'heroExp', 'data-cents': t.exp }))),
+      pct != null ? el('div', { class: 'hero-meter', role: 'img', 'aria-label': `${Math.round(pct)}% of budget used` }, el('i', { class: levelOf(used, budget), style: `width:${pct}%` })) : null,
+      el('div', { class: 'hero-foot', text: pct != null ? `${Math.round(pct)}% of your ${money(budget)} monthly budget used` : 'Set limits in Budget to see how much is left to spend.' })].filter(Boolean));
+    countUp(h);
+  }
+  function burst(type) {
+    if (reduceMotion.matches) return;
+    const b = el('div', { class: `burst ${type}`, 'aria-hidden': 'true' }, svgEl('<svg viewBox="0 0 52 52"><circle cx="26" cy="26" r="24"/><path d="M15 27l7 7 15-16"/></svg>'));
+    document.body.append(b); setTimeout(() => b.remove(), 900);
+  }
+  function confetti() {
+    if (reduceMotion.matches) return;
+    const box = el('div', { class: 'confetti', 'aria-hidden': 'true' });
+    for (let i = 0; i < 36; i++) box.append(el('i', { style: `left:${Math.random() * 100}%;background:var(${SW[i % SW.length]});animation-delay:${Math.random() * .4}s;animation-duration:${1.1 + Math.random() * .9}s;transform:rotate(${Math.random() * 360}deg)` }));
+    document.body.append(box); setTimeout(() => box.remove(), 2600);
   }
 
   function renderAlerts() {
@@ -231,9 +300,12 @@
     const catName = x.type === 'transfer' ? 'Transfer' : c ? c.name : 'Uncategorised';
     const accText = x.type === 'transfer' ? `${a ? a.name : '?'} → ${to ? to.name : '?'}` : a ? a.name : '';
     const cls = x.type === 'income' ? 'inc' : x.type === 'expense' ? 'exp' : 'xfer';
+    const color = x.type === 'transfer' ? 'var(--xfer)' : c ? `var(${c.color})` : 'var(--muted)';
+    const title = x.note || (sub ? sub.name : catName);
+    const line2 = [x.type === 'transfer' ? null : sub ? `${catName} · ${sub.name}` : catName, accText].filter(Boolean).join(' · ');
     return el('button', { class: 'tx', type: 'button', onclick: () => openTxSheet(x) },
-      el('span', { class: 'cat' }, el('span', { class: 'swatch', style: `background:${c ? `var(${c.color})` : 'var(--line)'}` }), sub ? `${catName} · ${sub.name}` : catName),
-      el('span', { class: 'what' }, el('div', {}, x.note || (sub ? sub.name : catName), x.recurringId ? el('span', { class: 'rep', text: '↻' }) : null), accText ? el('div', { class: 'acc', text: accText }) : null),
+      el('span', { class: 'avatar', style: `--c:${color}`, 'aria-hidden': 'true', text: x.type === 'transfer' ? '⇄' : (catName.trim()[0] || '?').toUpperCase() }),
+      el('span', { class: 'what' }, el('div', { class: 't1' }, title, x.recurringId ? el('span', { class: 'rep', text: '↻', title: 'Repeats' }) : null), line2 ? el('div', { class: 'acc', text: line2 }) : null),
       el('span', { class: `amt num ${cls}`, text: money(x.amountCents) }));
   }
   function groupByDay(list) {
@@ -255,10 +327,10 @@
     dailyList.replaceChildren();
     if (q) { const t = totals(list); dailyList.append(el('div', { class: 'hint', text: `${list.length} match${list.length === 1 ? '' : 'es'} in all months · ${money(t.exp)} spent · ${money(t.inc)} received` })); }
     if (!list.length) {
-      dailyList.append(el('div', { class: 'empty-state' }, el('div', { text: q ? 'Nothing matches that search.' : `No transactions in ${monthName(ui.month)} yet. Tap + to add one.` })));
+      dailyList.append(el('div', { class: 'empty-state center' }, q ? null : el('img', { src: 'icons/icon-192.png', alt: '', width: 56, height: 56, class: 'empty-ico' }), el('div', { text: q ? 'Nothing matches that search.' : `No transactions in ${monthName(ui.month)} yet. Tap + to add your first one.` })));
       return;
     }
-    groupByDay(list).forEach(([d, l]) => dailyList.append(dayCard(d, l)));
+    groupByDay(list).forEach(([d, l], i) => { const card = dayCard(d, l); card.style.setProperty('--d', Math.min(i, 8)); dailyList.append(card); });
   }
   function viewDaily() { fillDaily(); return el('div', { class: 'stack' }, searchInput, dailyList); }
 
@@ -547,7 +619,7 @@
         const before = goalSaved(g);
         g.contribs = g.contribs || []; g.contribs.push({ id: uid(), date: v.cDate || todayISO(), amountCents: sign * a });
         save(); render(); buzz();
-        if (sign > 0 && before < g.targetCents && before + a >= g.targetCents) toast(`You reached ${g.name}. Nice work.`);
+        if (sign > 0 && before < g.targetCents && before + a >= g.targetCents) { toast(`You reached ${g.name}. Nice work.`); confetti(); }
         else toast(sign > 0 ? `${money(a)} added to ${g.name}.` : `${money(a)} taken out of ${g.name}.`);
         return true;
       },
@@ -564,6 +636,10 @@
     if (!isStandalone()) box.append(el('div', { class: 'panel' }, el('h2', { text: 'Install the app' }),
       el('p', { class: 'hint', text: 'Adds Ledger to your home screen with its own icon. It opens full screen and works without internet.' }),
       el('div', {}, el('button', { class: 'btn primary', text: 'Install Ledger', onclick: promptInstall }))));
+    box.append(el('div', { class: 'panel' }, el('div', { class: 'panel-head' }, el('h2', { text: 'App updates' }), el('span', { class: 'pill ok', text: `v${APP_VERSION}` })),
+      el('p', { class: 'hint', text: 'New versions install by themselves when you open Ledger with internet. Your data is never touched by an update.' }),
+      el('div', { class: 'acts', style: 'justify-content:flex-start' }, el('button', { class: 'btn small', type: 'button', text: 'Check for updates now', onclick: () => checkForUpdate(true) }),
+        el('button', { class: 'btn small', type: 'button', text: "What's new", onclick: whatsNew }))));
     const th = getTheme();
     box.append(el('div', { class: 'panel' }, el('h2', { text: 'Appearance' }),
       el('div', { class: 'seg', role: 'group', 'aria-label': 'Theme' }, [['system', 'Match phone'], ['light', 'Light'], ['dark', 'Dark']].map(([k, label]) =>
@@ -571,12 +647,16 @@
       el('p', { class: 'hint', text: th === 'system' ? `Following your phone's setting (currently ${darkMQ.matches ? 'dark' : 'light'}).` : `Always ${th}. The sun/moon button at the top switches quickly.` })));
     box.append(viewAccounts(), viewRecurring());
     // security
+    const pinRow = (label, value, btnLabel, fn) => el('div', { class: 'row-item' }, el('span', { class: 'grow' }, label, el('div', { class: 'sub', text: value })), el('button', { class: 'btn small', type: 'button', text: btnLabel, onclick: fn }));
     box.append(el('div', { class: 'panel' }, el('h2', { text: 'PIN lock' }),
-      el('p', { class: 'hint', text: data.pin ? 'Ledger asks for your PIN when it opens and after a minute in the background.' : 'Lock the app with a 4 to 6 digit PIN so nobody who picks up your phone can open it.' }),
+      el('p', { class: 'hint', text: data.pin ? 'Ledger asks for your PIN when it opens and after a minute in the background. Changing or removing it needs your current PIN.' : 'Lock the app with a 4 to 6 digit PIN so nobody who picks up your phone can open it.' }),
       el('div', { class: 'acts', style: 'justify-content:flex-start' },
-        el('button', { class: 'btn primary small', text: data.pin ? 'Change PIN' : 'Set a PIN', onclick: () => startPinSetup() }),
-        data.pin ? el('button', { class: 'btn small', text: 'Lock now', onclick: () => showLock('unlock') }) : null,
-        data.pin ? el('button', { class: 'btn danger small', text: 'Remove PIN', onclick: async () => { if (await ask({ title: 'Remove the PIN?', body: 'Anyone with your phone will be able to open Ledger.', ok: 'Remove', danger: true })) { data.pin = null; save(); render(); toast('PIN removed.'); } } }) : null)));
+        el('button', { class: 'btn primary small', type: 'button', text: data.pin ? 'Change PIN' : 'Set a PIN', onclick: setOrChangePin }),
+        data.pin ? el('button', { class: 'btn small', type: 'button', text: 'Lock now', onclick: () => showLock('unlock') }) : null,
+        data.pin ? el('button', { class: 'btn danger small', type: 'button', text: 'Remove PIN', onclick: removePin }) : null),
+      data.pin ? el('div', { class: 'row-list' },
+        pinRow('Recovery code', data.pin.rec ? `Set up on ${new Date(data.pin.rec.created).toLocaleDateString()}` : 'Not set up. You need it to reset a forgotten PIN.', data.pin.rec ? 'New code' : 'Create', newRecoveryCodeFlow),
+        pinRow('Security question', data.pin.q ? data.pin.q.question : 'Optional second way to reset your PIN.', data.pin.q ? 'Change' : 'Add', securityQuestionFlow)) : null));
     // data
     const cur = currencySelect('currency');
     cur.onchange = () => { data.currency = cur.value; save(); render(); };
@@ -589,6 +669,7 @@
         el('button', { class: 'btn small', text: 'Export CSV', onclick: exportCSV })),
       el('p', { class: 'hint', text: 'Restore accepts a Ledger backup file. Import accepts the CSV exported from the claude.ai version or this app.' }),
       el('div', {}, el('button', { class: 'btn danger small', text: 'Erase everything on this device', onclick: async () => {
+        if (data.pin && !(await requirePin())) return;
         if (await ask({ title: 'Erase all data?', body: 'This deletes every transaction, budget, goal and account on this phone. Back up first if you might need it.', ok: 'Erase everything', danger: true })) { data = fresh(); data.onboarded = false; save(); ui.tab = 'trans'; render(); toast('All data erased.'); }
       } }))));
     box.append(behindTheScenes());
@@ -610,7 +691,10 @@
     add('Transactions', `${data.txs.length}${dates.length ? ` (${niceDate(dates[0])} to ${niceDate(dates[dates.length - 1])})` : ''}`);
     add('Categories', `${data.categories.length} expense, ${data.incomeCategories.length} income, ${subs} subcategories`);
     add('Accounts · repeating · goals', `${data.accounts.length} · ${data.recurring.length} · ${data.goals.length}`);
-    add('PIN', data.pin ? `On (${data.pin.len} digits, stored only as a salted SHA-256 hash)` : 'Off');
+    add('PIN', data.pin ? `On (${data.pin.len} digits, stored only as a salted SHA-256 hash). Recovery: ${[data.pin.rec && 'code', data.pin.q && 'security question'].filter(Boolean).join(' and ') || 'none'}` : 'Off');
+    add('App version', `v${APP_VERSION}`);
+    let snap = null; try { snap = JSON.parse(lsGet(SNAP_KEY)); } catch {}
+    add('Safety copy from last update', snap ? `Saved ${new Date(snap.at).toLocaleString()} (from v${snap.from})` : 'None yet');
     add('Last backup', data.lastBackup ? new Date(data.lastBackup).toLocaleString() : 'Never');
     add('Running as', isStandalone() ? 'Installed app' : 'Web page in the browser');
     add('Offline copy of the app', 'Checking…', 'bsCache');
@@ -627,7 +711,14 @@
     }, 0);
     return el('div', { class: 'panel' }, el('h2', { text: 'Behind the scenes' }),
       el('p', { class: 'hint', text: 'Ledger has no server. Everything below is read live from this phone.' }), rows,
-      el('div', { class: 'acts', style: 'justify-content:flex-start' }, el('button', { class: 'btn small', text: 'View stored data', onclick: showRawData })));
+      el('div', { class: 'acts', style: 'justify-content:flex-start' }, el('button', { class: 'btn small', text: 'View stored data', onclick: showRawData }),
+        snap ? el('button', { class: 'btn small', text: 'Restore safety copy', onclick: () => restoreSnapshot(snap) }) : null));
+  }
+  async function restoreSnapshot(snap) {
+    if (data.pin && !(await requirePin())) return;
+    let old; try { old = JSON.parse(snap.raw); } catch { toast("The safety copy couldn't be read.", 'over'); return; }
+    if (!(await ask({ title: 'Restore the safety copy?', body: `It holds ${(old.txs || []).length} transactions as they were on ${new Date(snap.at).toLocaleDateString()}, before the update. What's on the phone now (${data.txs.length} transactions) will be replaced.`, ok: 'Restore', danger: true }))) return;
+    const pin = data.pin; data = normalize(old); data.pin = pin; data.appVersion = APP_VERSION; save(); render(); toast('Safety copy restored.');
   }
   function showRawData() {
     const { pin, ...rest } = data;
@@ -798,7 +889,7 @@
     }
     const i = data.txs.findIndex(t => t.id === tx.id);
     if (i >= 0) data.txs[i] = tx; else data.txs.push(tx);
-    save(); buzz();
+    save(); buzz(); burst(type);
     lsSet('ledger-last-type', type); if (accountId) lsSet('ledger-last-acc', accountId);
     const caught = freq ? runRecurring(true) : 0;
     if (c && c.limitCents != null && after > c.limitCents) toast(`Saved. ${c.name} is now ${money(after - c.limitCents)} over budget.`, 'over');
@@ -835,10 +926,10 @@
     setTimeout(() => { const i = body.querySelector('input'); if (i) i.focus(); }, 60);
   }
   const closeForm = () => { $('formSheet').hidden = true; formCfg = null; };
-  function openInfo(title, nodes) {
+  function openInfo(title, nodes, doneLabel = 'Done') {
     formCfg = null; $('genTitle').textContent = title;
     $('genBody').replaceChildren(...nodes);
-    $('genActs').replaceChildren(el('button', { type: 'button', class: 'btn primary', text: 'Done', onclick: closeForm }));
+    $('genActs').replaceChildren(el('button', { type: 'button', class: 'btn primary', text: doneLabel, onclick: closeForm }));
     $('formSheet').hidden = false;
   }
   $('genClose').onclick = closeForm;
@@ -907,6 +998,7 @@
   $('fileIn').addEventListener('change', async e => {
     const f = e.target.files && e.target.files[0]; if (!f) return;
     const text = await f.text();
+    if (forgotRestore && !/^\s*[{[]/.test(text)) { forgotRestore = false; toast('Choose a Ledger backup file (.json) to restore.', 'warn'); return; }
     try {
       if (/^\s*[{[]/.test(text)) await restoreJSON(JSON.parse(text)); else await importCSV(text);
     } catch (err) { toast(`That file couldn't be read (${err.message}).`, 'over'); }
@@ -914,8 +1006,10 @@
   async function restoreJSON(obj) {
     if (!obj || !Array.isArray(obj.txs)) throw new Error('not a Ledger backup');
     if (!(await ask({ title: 'Restore this backup?', body: `It has ${obj.txs.length} transactions, ${(obj.goals || []).length} goals and ${(obj.categories || []).length} categories. Everything currently on this phone will be replaced.`, ok: 'Replace and restore', danger: true }))) return;
-    const pin = data.pin; delete obj.app;
-    data = normalize(obj); data.pin = pin; data.onboarded = true; save(); runRecurring(true); ui.tab = 'trans'; render(); toast('Backup restored.');
+    const viaForgot = forgotRestore; forgotRestore = false;
+    const pin = viaForgot ? null : data.pin; delete obj.app;
+    data = normalize(obj); data.pin = pin; data.onboarded = true; data.appVersion = APP_VERSION; save(); runRecurring(true); ui.tab = 'trans';
+    if (viaForgot) { hideLock(); render(); toast('Backup restored. The old PIN was removed; set a new one under More.'); } else { render(); toast('Backup restored.'); }
   }
   function parseCSV(text) {
     const rows = []; let row = [], cell = '', q = false;
@@ -959,14 +1053,26 @@
   }
 
   /* ================= PIN lock ================= */
-  const lock = { mode: 'unlock', entry: '', first: '', fails: 0, until: 0, len: 4 };
-  async function hashPin(pin, salt) {
-    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${salt}:${pin}`));
+  const lock = { mode: 'unlock', entry: '', first: '', fails: 0, until: 0, resolve: null };
+  const LOCK_TITLES = { unlock: 'Enter your PIN', verify: 'Enter your current PIN', set1: 'Choose a new 4 to 6 digit PIN', set2: 'Enter the new PIN again' };
+  const QUESTIONS = ['What was the name of your first school?', 'What was your childhood nickname?', 'In what town was your mother born?', 'What was the name of your first pet?', 'What was the make of your first phone?', 'Who was your best friend as a child?'];
+  let forgotRestore = false, suggestedRecovery = false;
+  async function sha(text) {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
     return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
   }
+  const hashPin = (pin, salt) => sha(`${salt}:${pin}`);
+  const normCode = s => String(s).toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const normAnswer = s => String(s).trim().toLowerCase().replace(/\s+/g, ' ');
+  function newRecoveryCode() {
+    const A = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789', b = new Uint8Array(12); crypto.getRandomValues(b);
+    const c = [...b].map(x => A[x % A.length]).join('');
+    return `${c.slice(0, 4)}-${c.slice(4, 8)}-${c.slice(8)}`;
+  }
+  const checking = () => lock.mode === 'unlock' || lock.mode === 'verify';
   function drawDots() {
     const d = $('pinDots'); d.replaceChildren();
-    const n = lock.mode === 'unlock' ? data.pin.len : Math.max(4, lock.entry.length);
+    const n = checking() ? data.pin.len : Math.max(4, lock.entry.length);
     for (let i = 0; i < n; i++) d.append(el('i', { class: i < lock.entry.length ? 'on' : '' }));
   }
   function buildPad() {
@@ -975,26 +1081,39 @@
       const ghost = k === '' || k === 'Cancel' || k === '⌫';
       p.append(el('button', { type: 'button', class: ghost ? 'ghost' : '', text: k, 'aria-label': k === '⌫' ? 'Delete digit' : k || null, disabled: k === '' || null, onclick: () => pinKey(k) }));
     });
-    if (lock.mode !== 'unlock') p.append(el('span'), el('button', { type: 'button', class: 'ghost', text: 'Done', onclick: () => pinKey('done') }), el('span'));
-    $('forgot').hidden = lock.mode !== 'unlock';
+    if (!checking()) p.append(el('span'), el('button', { type: 'button', class: 'ghost', text: 'Done', onclick: () => pinKey('done') }), el('span'));
+    $('forgot').hidden = !checking();
   }
-  function showLock(mode) {
+  function showLock(mode, msg) {
+    if (mode === 'unlock') {
+      closeSheet(); closeForm(); $('confirm').hidden = true;
+      const pending = lock.resolve; lock.resolve = null; if (pending) pending(lock.mode.startsWith('set') ? null : false);
+    }
     lock.mode = mode; lock.entry = ''; $('lock').hidden = false;
-    $('lockTitle').textContent = mode === 'unlock' ? 'Enter your PIN' : mode === 'set1' ? 'Choose a 4 to 6 digit PIN' : 'Enter the same PIN again';
-    $('lockMsg').textContent = mode === 'set1' ? 'Tap Done when finished.' : ' ';
+    $('lockTitle').textContent = LOCK_TITLES[mode];
+    $('lockMsg').textContent = msg || (mode === 'set1' ? 'Tap Done when finished.' : mode === 'verify' ? 'This keeps your PIN safe if someone else has your phone.' : ' ');
     buildPad(); drawDots();
   }
-  const startPinSetup = () => showLock('set1');
+  function hideLock() { $('lock').hidden = true; lock.entry = ''; }
+  const finish = v => { const r = lock.resolve; lock.resolve = null; if (r) r(v); };
+  // Ask for the current PIN. Resolves true when it is right, false on cancel.
+  const requirePin = () => data.pin ? new Promise(res => { lock.resolve = res; showLock('verify'); }) : Promise.resolve(true);
+  // Ask for a new PIN twice. Resolves the PIN, or null on cancel.
+  const choosePin = () => new Promise(res => { lock.resolve = res; lock.first = ''; showLock('set1'); });
   async function pinKey(k) {
-    if (k === 'Cancel') { $('lock').hidden = true; return; }
+    if (k === 'Cancel') { const wasSet = lock.mode.startsWith('set'); hideLock(); finish(wasSet ? null : false); return; }
     if (k === '⌫') { lock.entry = lock.entry.slice(0, -1); drawDots(); return; }
     if (k === 'done') return finishSet();
     if (!/^\d$/.test(k)) return;
-    if (lock.mode === 'unlock' && Date.now() < lock.until) { $('lockMsg').textContent = `Too many tries. Wait ${Math.ceil((lock.until - Date.now()) / 1000)} seconds.`; return; }
+    if (checking() && Date.now() < lock.until) { $('lockMsg').textContent = `Too many tries. Wait ${Math.ceil((lock.until - Date.now()) / 1000)} seconds.`; return; }
     if (lock.entry.length >= 6) return;
     lock.entry += k; drawDots();
-    if (lock.mode === 'unlock' && lock.entry.length === data.pin.len) {
-      if (await hashPin(lock.entry, data.pin.salt) === data.pin.hash) { lock.fails = 0; $('lock').hidden = true; lock.entry = ''; return; }
+    if (checking() && lock.entry.length === data.pin.len) {
+      if (await hashPin(lock.entry, data.pin.salt) === data.pin.hash) {
+        lock.fails = 0; const mode = lock.mode; hideLock();
+        if (mode === 'verify') finish(true); else afterUnlock();
+        return;
+      }
       lock.fails++; lock.entry = '';
       if (lock.fails >= 5) { lock.until = Date.now() + 30000; lock.fails = 0; }
       const d = $('pinDots'); d.classList.remove('shake'); void d.offsetWidth; d.classList.add('shake');
@@ -1002,24 +1121,130 @@
     }
     if (lock.mode === 'set2' && lock.entry.length === lock.first.length) finishSet();
   }
-  async function finishSet() {
+  function finishSet() {
     if (lock.entry.length < 4) { $('lockMsg').textContent = 'Use at least 4 digits.'; return; }
-    if (lock.mode === 'set1') { lock.first = lock.entry; showLock('set2'); $('lockMsg').textContent = ' '; return; }
-    if (lock.entry !== lock.first) { lock.first = ''; showLock('set1'); $('lockMsg').textContent = "Those didn't match. Start again."; return; }
-    const salt = uid(); data.pin = { salt, len: lock.entry.length, hash: await hashPin(lock.entry, salt) };
-    save(); $('lock').hidden = true; render(); toast('PIN set. Ledger locks after a minute in the background.');
+    if (lock.mode === 'set1') { lock.first = lock.entry; showLock('set2'); return; }
+    if (lock.entry !== lock.first) { lock.first = ''; showLock('set1', "Those didn't match. Start again."); return; }
+    const pin = lock.entry; hideLock(); finish(pin);
   }
-  $('forgot').onclick = async () => {
-    if (await ask({ title: 'Forgot your PIN?', body: 'The only way in without the PIN is to erase all data on this phone. You can restore it afterwards from a backup file.', ok: 'Erase and reset', danger: true })) {
-      data = fresh(); save(); $('lock').hidden = true; ui.tab = 'trans'; render(); toast('Ledger was reset. Use More → Restore to bring back a backup.');
+  async function storePin(pin) {
+    const salt = uid(), keep = data.pin || {};
+    data.pin = { salt, len: pin.length, hash: await hashPin(pin, salt), rec: keep.rec || null, q: keep.q || null };
+    save();
+  }
+  async function setOrChangePin() {
+    const had = !!data.pin;
+    if (had && !(await requirePin())) return;
+    const pin = await choosePin();
+    if (!pin) { toast(had ? 'PIN not changed.' : 'No PIN was set.'); return; }
+    await storePin(pin); buzz(); render();
+    toast(had ? 'PIN changed.' : 'PIN set. Ledger locks after a minute in the background.');
+    if (!data.pin.rec) makeRecoveryCode();
+  }
+  async function removePin() {
+    if (!(await requirePin())) return;
+    if (await ask({ title: 'Remove the PIN?', body: 'Anyone with your phone will be able to open Ledger. Your recovery code and security question are removed too.', ok: 'Remove PIN', danger: true })) {
+      data.pin = null; save(); render(); toast('PIN removed.');
     }
-  };
-  document.addEventListener('keydown', e => { if ($('lock').hidden) return; if (/^\d$/.test(e.key)) pinKey(e.key); else if (e.key === 'Backspace') pinKey('⌫'); else if (e.key === 'Enter' && lock.mode !== 'unlock') pinKey('done'); });
+  }
+  async function makeRecoveryCode() {
+    const code = newRecoveryCode(), salt = uid();
+    data.pin.rec = { salt, hash: await sha(`${salt}:${normCode(code)}`), created: Date.now() };
+    save(); render();
+    const box = el('div', { class: 'rcode', text: code });
+    const copy = el('button', { class: 'btn small', type: 'button', text: 'Copy code', onclick: async () => {
+      try { await navigator.clipboard.writeText(code); toast('Code copied. Paste it somewhere safe.'); }
+      catch { const r = document.createRange(); r.selectNodeContents(box); const s = getSelection(); s.removeAllRanges(); s.addRange(r); toast("Selected. Use your phone's Copy."); }
+    } });
+    openInfo('Your recovery code', [
+      el('p', { text: 'If you ever forget your PIN, this code lets you set a new one without losing anything.' }), box,
+      el('div', { class: 'acts', style: 'justify-content:flex-start' }, copy),
+      el('p', { class: 'hint', text: 'Write it down, screenshot it, or keep it in your notes or email. Ledger shows it only this once and stores only a scrambled version of it.' })], "I've saved it");
+  }
+  async function newRecoveryCodeFlow() {
+    if (!(await requirePin())) return;
+    if (data.pin.rec && !(await ask({ title: 'Make a new recovery code?', body: 'Your old code will stop working.', ok: 'Make new code' }))) return;
+    makeRecoveryCode();
+  }
+  async function securityQuestionFlow() {
+    if (!(await requirePin())) return;
+    openForm({
+      title: 'Security question',
+      fields: [
+        { id: 'sqQ', label: 'Question', type: 'select', options: QUESTIONS.map(q => [q, q]), value: data.pin.q ? data.pin.q.question : QUESTIONS[0] },
+        { id: 'sqA', label: 'Answer', required: true, placeholder: 'Capitals and spaces do not matter' },
+        { id: 'sqA2', label: 'Type the answer again', required: true },
+      ],
+      submit: 'Save',
+      onSubmit: v => {
+        if (normAnswer(v.sqA).length < 2) { toast('Use an answer with at least 2 letters.', 'warn'); return false; }
+        if (normAnswer(v.sqA) !== normAnswer(v.sqA2)) { toast("The two answers don't match.", 'warn'); return false; }
+        const salt = uid();
+        sha(`${salt}:${normAnswer(v.sqA)}`).then(hash => { data.pin.q = { question: v.sqQ, salt, hash }; save(); render(); toast('Security question saved.'); });
+        return true;
+      },
+      onDelete: data.pin.q ? () => { data.pin.q = null; save(); render(); toast('Security question removed.'); } : null,
+      deleteLabel: 'Remove question',
+    });
+  }
+  function forgotPin() {
+    forgotRestore = false;
+    const p = data.pin || {}, hasWay = p.rec || p.q;
+    const opts = [];
+    if (p.rec) opts.push(el('button', { class: 'btn primary', type: 'button', text: 'Use my recovery code', onclick: () => recoverWith('code') }));
+    if (p.q) opts.push(el('button', { class: p.rec ? 'btn' : 'btn primary', type: 'button', text: 'Answer my security question', onclick: () => recoverWith('q') }));
+    opts.push(el('button', { class: 'btn', type: 'button', text: 'Restore from a backup file', onclick: () => { forgotRestore = true; closeForm(); pickFile(); } }));
+    opts.push(armDelete(el('button', { class: 'btn danger', type: 'button', text: 'Erase everything and start over' }), () => {
+      finish(false); data = fresh(); save(); closeForm(); hideLock(); ui.tab = 'trans'; render(); toast('Ledger was reset. You can restore a backup under More.');
+    }));
+    openInfo('Forgot your PIN?', [
+      el('p', { class: 'hint', text: hasWay ? 'Prove it is you with one of these, then choose a new PIN. Your transactions stay exactly as they are.' : "This PIN was set before recovery options existed, so Ledger can't confirm it's you. You can replace what's on this phone with a backup file, or erase it and start again. Keep trying your PIN first if you can." }),
+      el('div', { class: 'stack-sm' }, opts)], 'Back');
+  }
+  function recoverWith(kind) {
+    openForm({
+      title: kind === 'code' ? 'Enter your recovery code' : 'Answer your security question',
+      fields: [kind === 'code' ? { id: 'rcCode', label: 'Recovery code', placeholder: 'XXXX-XXXX-XXXX', required: true } : { id: 'rcAns', label: data.pin.q.question, required: true }],
+      submit: 'Continue',
+      onSubmit: v => { verifyRecovery(kind, v); return false; },
+    });
+  }
+  async function verifyRecovery(kind, v) {
+    if (Date.now() < lock.until) { toast(`Too many tries. Wait ${Math.ceil((lock.until - Date.now()) / 1000)} seconds.`, 'warn'); return; }
+    const ok = kind === 'code'
+      ? await sha(`${data.pin.rec.salt}:${normCode(v.rcCode)}`) === data.pin.rec.hash
+      : await sha(`${data.pin.q.salt}:${normAnswer(v.rcAns)}`) === data.pin.q.hash;
+    if (!ok) {
+      lock.fails++; if (lock.fails >= 5) { lock.until = Date.now() + 60000; lock.fails = 0; }
+      toast(kind === 'code' ? "That code doesn't match. Check for typos." : "That answer doesn't match.", 'warn'); buzz(); return;
+    }
+    lock.fails = 0; closeForm(); finish(false);
+    const pin = await choosePin();
+    if (!pin) { showLock('unlock'); return; }
+    await storePin(pin); buzz(); render(); toast('New PIN set. All your data is still here.');
+    afterUnlock();
+  }
+  function afterUnlock() {
+    forgotRestore = false;
+    if (pendingWhatsNew) { pendingWhatsNew = false; setTimeout(whatsNew, 350); return; }
+    if (data.pin && !data.pin.rec && !data.pin.q && !suggestedRecovery) {
+      suggestedRecovery = true;
+      setTimeout(() => openInfo('Add a way back in', [
+        el('p', { text: 'If you forget your PIN, a recovery code lets you set a new one without losing your data. It takes a few seconds.' }),
+        el('div', {}, el('button', { class: 'btn primary', type: 'button', text: 'Create recovery code', onclick: () => { closeForm(); makeRecoveryCode(); } }))], 'Later'), 400);
+    }
+  }
+  $('forgot').onclick = forgotPin;
+  document.addEventListener('keydown', e => {
+    if ($('lock').hidden || !$('formSheet').hidden || !$('confirm').hidden) return;
+    if (/^\d$/.test(e.key)) pinKey(e.key); else if (e.key === 'Backspace') pinKey('⌫'); else if (e.key === 'Enter' && !checking()) pinKey('done');
+  });
   let hiddenAt = 0;
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) { hiddenAt = Date.now(); return; }
-    if (data.pin && hiddenAt && Date.now() - hiddenAt > 60000 && $('lock').hidden) showLock('unlock');
+    if (data.pin && hiddenAt && Date.now() - hiddenAt > 60000 && ($('lock').hidden || lock.mode !== 'unlock')) showLock('unlock');
     runRecurring();
+    if (swReg) swReg.update().catch(() => {});
     if (!editingInline() && $('sheet').hidden && $('formSheet').hidden) render();
   });
 
@@ -1065,23 +1290,69 @@
     openInfo('Install Ledger', [el('ol', { class: 'steps' }, steps), el('div', { class: 'field' }, el('span', { class: 'label', text: 'App link' }), el('div', { class: 'linkbox' }, link, copy))]);
   }
 
+  /* ================= updates ================= */
+  // A new version installs in the background; it is applied straight away when the app has just opened
+  // (or when asked), otherwise a notice offers it. Updates only replace app files, never the stored data.
+  const bootAt = Date.now();
+  let swReg = null, wantReload = false, forcing = false;
+  function showUpdating(text) { $('updMsg').textContent = text || 'Updating Ledger…'; $('updating').hidden = false; }
+  function applyUpdate(worker) {
+    wantReload = true; showUpdating('Installing the new version…');
+    worker.postMessage('skip-waiting');
+    setTimeout(() => location.reload(), 5000);
+  }
+  function offerUpdate(worker) {
+    const idle = Date.now() - bootAt < 15000 && $('sheet').hidden && $('formSheet').hidden && !editingInline();
+    if (forcing || idle) applyUpdate(worker);
+    else toast('A new version of Ledger is ready.', '', { label: 'Update', fn: () => applyUpdate(worker) }, 20000);
+  }
+  function watchRegistration(reg) {
+    if (reg.waiting && navigator.serviceWorker.controller) offerUpdate(reg.waiting);
+    reg.addEventListener('updatefound', () => {
+      const nw = reg.installing; if (!nw) return;
+      nw.addEventListener('statechange', () => { if (nw.state === 'installed' && navigator.serviceWorker.controller) offerUpdate(nw); });
+    });
+  }
+  async function checkForUpdate(manual) {
+    if (!swReg) { if (manual) toast('Updates need the app opened from its link with internet.', 'warn'); return; }
+    forcing = true; showUpdating('Checking for updates…');
+    try { await swReg.update(); } catch { forcing = false; $('updating').hidden = true; toast("Couldn't reach the update server. Check your internet and try again.", 'warn'); return; }
+    if (swReg.waiting) { applyUpdate(swReg.waiting); return; }
+    const started = Date.now();
+    const wait = () => {
+      if (wantReload) return;
+      if (swReg.installing && Date.now() - started < 20000) { setTimeout(wait, 500); return; }
+      forcing = false; $('updating').hidden = true;
+      if (manual) toast(`You have the latest version (v${APP_VERSION}). Your data is safe.`);
+    };
+    setTimeout(wait, 1500);
+  }
+  function whatsNew() {
+    const li = t => el('li', { text: t });
+    openInfo(`What's new in v${APP_VERSION}`, [
+      el('p', { class: 'hint', text: 'All your transactions, budgets, goals and settings carried over.' }),
+      el('ul', { class: 'steps' },
+        li('Changing or removing your PIN now asks for your current PIN first.'),
+        li('Forgot PIN works: reset it with a recovery code or a security question, without losing any data.'),
+        li('A livelier look: summary card with what is left to spend, category badges, animated totals and bars.'),
+        li('Updates install by themselves when you open Ledger. A safety copy of your data is kept before each one.')),
+      data.pin && !data.pin.rec ? el('div', {}, el('button', { class: 'btn primary', type: 'button', text: 'Create a recovery code now', onclick: async () => { closeForm(); if (await requirePin()) makeRecoveryCode(); } })) : null], 'Got it');
+  }
   if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
-    let wantReload = false;
     navigator.serviceWorker.register('sw.js').then(reg => {
-      reg.addEventListener('updatefound', () => {
-        const nw = reg.installing; if (!nw) return;
-        nw.addEventListener('statechange', () => {
-          if (nw.state === 'installed' && navigator.serviceWorker.controller) toast('A new version of Ledger is ready.', '', { label: 'Update', fn: () => { wantReload = true; nw.postMessage('skip-waiting'); } }, 20000);
-        });
-      });
+      swReg = reg; watchRegistration(reg);
+      if (location.hash === '#update') { try { history.replaceState(null, '', location.pathname); } catch {} checkForUpdate(true); }
+      else reg.update().catch(() => {});
     }).catch(() => {});
     navigator.serviceWorker.addEventListener('controllerchange', () => { if (wantReload) location.reload(); });
   }
 
   /* ================= boot ================= */
   const h = location.hash.slice(1); if (TITLES[h]) ui.tab = h;
+  document.querySelectorAll('#bottomNav button svg').forEach(svg => { const w = el('span', { class: 'ico' }); svg.replaceWith(w); w.append(svg); });
   runRecurring(true);
   themeUI();
   render();
-  if (data.pin) showLock('unlock');
+  if (justUpdated) pendingWhatsNew = true;
+  if (data.pin) showLock('unlock'); else afterUnlock();
 })();

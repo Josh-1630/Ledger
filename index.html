@@ -37,6 +37,8 @@
 
   <nav class="subtabs" id="subtabs" aria-label="View"></nav>
 
+  <section class="hero" id="hero" aria-label="This month" hidden></section>
+
   <section class="period" id="period" aria-label="Period totals">
     <div><span class="label">Income</span><span class="big num inc" id="pInc">–</span></div>
     <div><span class="label">Expenses</span><span class="big num exp" id="pExp">–</span></div>
@@ -117,6 +119,14 @@
     <p class="hint" id="lockMsg">&nbsp;</p>
     <div class="pad" id="pad"></div>
     <button class="linkbtn" id="forgot">Forgot PIN?</button>
+  </div>
+</div>
+
+<div class="updating" id="updating" hidden>
+  <div class="upd-card" role="status" aria-live="polite">
+    <span class="spinner" aria-hidden="true"></span>
+    <strong id="updMsg">Updating Ledger…</strong>
+    <span class="hint">Your transactions stay on this phone.</span>
   </div>
 </div>
 
