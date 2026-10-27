@@ -14,7 +14,7 @@
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #0f1513; --surface: #161e1b; --sunk: #1d2724; --line: #2b3733; --fg: #e4ece8; --muted: #93a39c;
     --accent: #5cc3a3; --accent-ink: #08201a; --accent-soft: #19342c;
     --inc: #7fa6f2; --exp: #f08a76; --xfer: #93a39c; --fab: #e8704f;
@@ -23,6 +23,15 @@
     --scrim: rgba(0,0,0,.6); --shadow: 0 1px 2px rgba(0,0,0,.3), 0 6px 24px rgba(0,0,0,.3);
     color-scheme: dark;
   }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1513; --surface: #161e1b; --sunk: #1d2724; --line: #2b3733; --fg: #e4ece8; --muted: #93a39c;
+  --accent: #5cc3a3; --accent-ink: #08201a; --accent-soft: #19342c;
+  --inc: #7fa6f2; --exp: #f08a76; --xfer: #93a39c; --fab: #e8704f;
+  --ok: #6cc98f; --warn: #e3a64a; --warn-soft: #33270f; --over: #f07a70; --over-soft: #3a1a18;
+  --c1: #5cc3a3; --c2: #86a6e8; --c3: #e3a64a; --c4: #cf8ad3; --c5: #ec8a7c; --c6: #a3cf6c; --c7: #6cc6db; --c8: #c4b294;
+  --scrim: rgba(0,0,0,.6); --shadow: 0 1px 2px rgba(0,0,0,.3), 0 6px 24px rgba(0,0,0,.3);
+  color-scheme: dark;
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 [hidden] { display: none !important; }
@@ -46,6 +55,17 @@ button { cursor: pointer; }
 .stack-sm { display: grid; gap: 12px; min-width: 0; }
 
 /* header */
+.top-right { display: flex; align-items: center; gap: 8px; }
+.theme-btn { width: 42px; height: 42px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); display: grid; place-items: center; flex: none; }
+.theme-btn svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.theme-btn:active { background: var(--sunk); }
+.steps { margin: 0; padding-left: 1.3em; display: grid; gap: 8px; }
+.steps li { padding-left: 2px; }
+.steps b { font-weight: 600; }
+.kbd { display: inline-flex; align-items: center; gap: 4px; padding: 0 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--sunk); font-size: .85em; white-space: nowrap; }
+.kbd svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.linkbox { display: flex; gap: 8px; align-items: center; }
+.linkbox input { flex: 1; min-width: 0; height: 42px; padding: 0 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); font-size: 14px; }
 .top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
 .month { display: flex; align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
 .month button { background: none; border: 0; width: 42px; height: 40px; font-size: 1.2rem; color: var(--muted); border-radius: 12px; }

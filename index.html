@@ -5,7 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Spending Ledger</title>
 <meta name="description" content="Private money manager: expenses, income, budgets, goals and insights.">
-<meta name="theme-color" content="#1d6b57">
+<meta name="theme-color" content="#f3f5f4" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f1513" media="(prefers-color-scheme: dark)">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Ledger">
@@ -15,15 +16,22 @@
 <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="stylesheet" href="styles.css">
+<script>
+  // Apply the saved theme before first paint so there is no flash.
+  try { var t = localStorage.getItem('ledger-theme'); if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t); } catch (e) {}
+</script>
 </head>
 <body>
 <div class="app">
   <header class="top">
     <h1 id="viewTitle">Transactions</h1>
-    <div class="month" id="monthSwitch" role="group" aria-label="Period">
-      <button id="prev" aria-label="Previous">‹</button>
-      <span id="periodLabel" aria-live="polite"></span>
-      <button id="next" aria-label="Next">›</button>
+    <div class="top-right">
+      <div class="month" id="monthSwitch" role="group" aria-label="Period">
+        <button id="prev" aria-label="Previous">‹</button>
+        <span id="periodLabel" aria-live="polite"></span>
+        <button id="next" aria-label="Next">›</button>
+      </div>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="Switch theme"></button>
     </div>
   </header>
 

@@ -89,6 +89,33 @@
   }
   const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
   const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const browserEnv = (() => {
+    const ua = navigator.userAgent;
+    if (/FBAN|FBAV|FB_IAB|Instagram|Line\/|WhatsApp|Snapchat|Twitter|MicroMessenger|GSA\/|TikTok|; wv\)/i.test(ua)) return 'inapp';
+    if (isIOS) return /CriOS|FxiOS|EdgiOS|OPiOS/.test(ua) ? 'ios-other' : 'ios-safari';
+    if (/SamsungBrowser/i.test(ua)) return 'samsung';
+    if (/Android/i.test(ua)) return /Firefox/i.test(ua) ? 'firefox-android' : 'android-chrome';
+    return 'desktop';
+  })();
+
+  /* ================= theme ================= */
+  const ICON_SUN = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>';
+  const ICON_MOON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg>';
+  const darkMQ = matchMedia('(prefers-color-scheme: dark)');
+  const getTheme = () => { const t = lsGet('ledger-theme'); return t === 'light' || t === 'dark' ? t : 'system'; };
+  const isDark = () => getTheme() === 'dark' || (getTheme() === 'system' && darkMQ.matches);
+  function applyTheme(t) {
+    if (t === 'system') document.documentElement.removeAttribute('data-theme'); else document.documentElement.setAttribute('data-theme', t);
+    lsSet('ledger-theme', t); themeUI();
+  }
+  function themeUI() {
+    const dark = isDark();
+    $('themeBtn').innerHTML = dark ? ICON_SUN : ICON_MOON;
+    $('themeBtn').setAttribute('aria-label', dark ? 'Switch to light theme' : 'Switch to dark theme');
+    document.querySelectorAll('meta[name="theme-color"]').forEach(m => { m.content = getTheme() === 'system' ? (m.media.includes('dark') ? '#0f1513' : '#f3f5f4') : dark ? '#0f1513' : '#f3f5f4'; });
+  }
+  $('themeBtn').onclick = () => { applyTheme(isDark() ? 'light' : 'dark'); if (ui.tab === 'more') render(); };
+  darkMQ.addEventListener && darkMQ.addEventListener('change', themeUI);
 
   /* ================= recurring ================= */
   function nextDate(iso, freq, anchorDay) {
@@ -172,8 +199,8 @@
       const dismiss = el('button', { class: 'icon-btn', text: 'Not now', onclick: () => { lsSet('ledger-install-dismissed', '1'); render(); } });
       box.append(el('div', { class: 'alert info' }, el('span', { class: 'sign', text: '↓' }), el('div', { class: 'grow' },
         el('strong', { text: 'Put Ledger on your home screen' }),
-        el('span', { class: 'hint', text: deferredPrompt ? 'It opens full screen like a normal app and works offline.' : isIOS ? 'In Safari, tap the Share button, then "Add to Home Screen".' : 'Open your browser menu and choose "Install app" or "Add to Home screen".' }),
-        el('div', { class: 'acts', style: 'justify-content:flex-start' }, deferredPrompt ? el('button', { class: 'btn primary small', text: 'Install', onclick: promptInstall }) : null, dismiss))));
+        el('span', { class: 'hint', text: 'It gets its own icon, opens full screen like a normal app and works offline.' }),
+        el('div', { class: 'acts', style: 'justify-content:flex-start' }, el('button', { class: 'btn primary small', text: 'Install app', onclick: promptInstall }), dismiss))));
       return;
     }
     const since = data.lastBackup ? (Date.now() - data.lastBackup) / 864e5 : Infinity;
@@ -534,8 +561,13 @@
   function viewMore() {
     const box = el('div', { class: 'stack' });
     if (!isStandalone()) box.append(el('div', { class: 'panel' }, el('h2', { text: 'Install the app' }),
-      el('p', { class: 'hint', text: deferredPrompt ? 'Adds Ledger to your home screen. It opens full screen and works without internet.' : isIOS ? 'Open this page in Safari, tap the Share button, then "Add to Home Screen".' : 'Open your browser menu and choose "Install app" or "Add to Home screen".' }),
-      deferredPrompt ? el('div', {}, el('button', { class: 'btn primary', text: 'Install Ledger', onclick: promptInstall })) : null));
+      el('p', { class: 'hint', text: 'Adds Ledger to your home screen with its own icon. It opens full screen and works without internet.' }),
+      el('div', {}, el('button', { class: 'btn primary', text: 'Install Ledger', onclick: promptInstall }))));
+    const th = getTheme();
+    box.append(el('div', { class: 'panel' }, el('h2', { text: 'Appearance' }),
+      el('div', { class: 'seg', role: 'group', 'aria-label': 'Theme' }, [['system', 'Match phone'], ['light', 'Light'], ['dark', 'Dark']].map(([k, label]) =>
+        el('button', { type: 'button', 'aria-pressed': String(th === k), text: label, onclick: () => { applyTheme(k); render(); } }))),
+      el('p', { class: 'hint', text: th === 'system' ? `Following your phone's setting (currently ${darkMQ.matches ? 'dark' : 'light'}).` : `Always ${th}. The sun/moon button at the top switches quickly.` })));
     box.append(viewAccounts(), viewRecurring());
     // security
     box.append(el('div', { class: 'panel' }, el('h2', { text: 'PIN lock' }),
@@ -568,7 +600,7 @@
     const body = el('div', { class: 'panel' }, el('div', { class: 'panel-head' }, el('h2', { text: 'Accounts' }), el('button', { class: 'linkbtn', text: '+ Add', onclick: () => { ui.editAccount = 'new'; render(); focusFirst(); } })),
       el('div', { class: 'figs3' },
         el('div', {}, el('span', { class: 'label', text: 'Assets' }), el('span', { class: 'big num inc', text: money(assets) })),
-        el('div', {}, el('span', { class: 'label', text: 'Owed' }), el('span', { class: 'big num exp', text: money(-liab) })),
+        el('div', {}, el('span', { class: 'label', text: 'Owed' }), el('span', { class: 'big num exp', text: money(Math.abs(liab)) })),
         el('div', {}, el('span', { class: 'label', text: 'Net worth' }), el('span', { class: 'big num', text: money(assets + liab) }))));
     GROUPS.forEach(g => {
       const accs = data.accounts.filter(a => (a.group || 'Other') === g); if (!accs.length) return;
@@ -758,6 +790,12 @@
     setTimeout(() => { const i = body.querySelector('input'); if (i) i.focus(); }, 60);
   }
   const closeForm = () => { $('formSheet').hidden = true; formCfg = null; };
+  function openInfo(title, nodes) {
+    formCfg = null; $('genTitle').textContent = title;
+    $('genBody').replaceChildren(...nodes);
+    $('genActs').replaceChildren(el('button', { type: 'button', class: 'btn primary', text: 'Done', onclick: closeForm }));
+    $('formSheet').hidden = false;
+  }
   $('genClose').onclick = closeForm;
   $('formSheet').addEventListener('click', e => { if (e.target === $('formSheet')) closeForm(); });
   $('genForm').addEventListener('submit', e => {
@@ -952,7 +990,35 @@
 
   window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredPrompt = e; render(); });
   window.addEventListener('appinstalled', () => { deferredPrompt = null; toast('Ledger is on your home screen.'); render(); });
-  async function promptInstall() { if (!deferredPrompt) return; deferredPrompt.prompt(); try { await deferredPrompt.userChoice; } catch {} deferredPrompt = null; render(); }
+  async function promptInstall() {
+    if (!deferredPrompt) { installHelp(); return; }
+    const p = deferredPrompt; deferredPrompt = null;
+    try { p.prompt(); const r = await p.userChoice; if (r && r.outcome === 'dismissed') toast('Install cancelled. Tap Install app again any time.'); } catch { installHelp(); }
+    render();
+  }
+  const kbd = (label, svg) => el('span', { class: 'kbd' }, svg ? svgEl(svg) : null, label);
+  const SHARE_SVG = '<svg viewBox="0 0 24 24"><path d="M12 3v12M7 8l5-5 5 5"/><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"/></svg>';
+  function installHelp() {
+    const url = location.href.split('#')[0];
+    const li = (...k) => el('li', {}, ...k);
+    const steps = {
+      inapp: [li("You're viewing Ledger inside another app (like WhatsApp or Instagram), and those can't install apps."),
+        isIOS ? li('Tap ', kbd('···'), ' or the compass icon, then ', el('b', { text: 'Open in Safari' }), '.') : li('Tap ', kbd('⋮'), ' at the top right, then ', el('b', { text: 'Open in Chrome' }), ' (or "Open in browser").'),
+        li('Then tap ', el('b', { text: 'Install app' }), ' again there. Or copy the link below and paste it into ', isIOS ? 'Safari' : 'Chrome', '.')],
+      'ios-safari': [li('Tap the Share button ', kbd('', SHARE_SVG), ' at the bottom of Safari (top right on iPad).'), li('Scroll down and tap ', el('b', { text: 'Add to Home Screen' }), '.'), li('Tap ', el('b', { text: 'Add' }), '. Open Ledger from its new icon.')],
+      'ios-other': [li('On iPhone, the most reliable way to install is from ', el('b', { text: 'Safari' }), '. Copy the link below, open Safari and paste it.'), li('In Safari tap Share ', kbd('', SHARE_SVG), ' → ', el('b', { text: 'Add to Home Screen' }), ' → ', el('b', { text: 'Add' }), '.'), li('On iOS 16.4 or later you can also tap Share ', kbd('', SHARE_SVG), ' in this browser\'s address bar and choose Add to Home Screen.')],
+      'android-chrome': [li('Tap ', kbd('⋮'), ' at the top right of Chrome.'), li('Tap ', el('b', { text: 'Install app' }), ' or ', el('b', { text: 'Add to Home screen' }), ', then ', el('b', { text: 'Install' }), '.'), li('If you opened the link from WhatsApp, Gmail or another app, first tap ', kbd('⋮'), ' → ', el('b', { text: 'Open in Chrome' }), '. Installing only works in Chrome itself.')],
+      samsung: [li('Tap the menu ', kbd('≡'), ' at the bottom right.'), li('Tap ', el('b', { text: 'Add page to' }), ' → ', el('b', { text: 'Home screen' }), '.'), li('Or tap the install icon in the address bar if you see one.')],
+      'firefox-android': [li('Tap ', kbd('⋮'), ' in Firefox.'), li('Tap ', el('b', { text: 'Install' }), ' or ', el('b', { text: 'Add to Home screen' }), '.')],
+      desktop: [li('In Chrome or Edge, click the install icon at the right of the address bar, or the menu → ', el('b', { text: 'Install Ledger' }), '.'), li('To put it on your phone, open the link below on the phone.')],
+    }[browserEnv];
+    const link = el('input', { readonly: true, value: url, 'aria-label': 'App link' });
+    const copy = el('button', { class: 'btn small', type: 'button', text: 'Copy link', onclick: async () => {
+      try { await navigator.clipboard.writeText(url); toast('Link copied.'); }
+      catch { link.select(); try { document.execCommand('copy'); toast('Link copied.'); } catch { toast('Select the link and copy it.'); } }
+    } });
+    openInfo('Install Ledger', [el('ol', { class: 'steps' }, steps), el('div', { class: 'field' }, el('span', { class: 'label', text: 'App link' }), el('div', { class: 'linkbox' }, link, copy))]);
+  }
 
   if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
     let wantReload = false;
@@ -970,6 +1036,7 @@
   /* ================= boot ================= */
   const h = location.hash.slice(1); if (TITLES[h]) ui.tab = h;
   runRecurring(true);
+  themeUI();
   render();
   if (data.pin) showLock('unlock');
 })();

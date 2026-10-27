@@ -1,5 +1,5 @@
 // Offline support: serve the app shell from cache, refresh it from the network in the background.
-const CACHE = 'ledger-v1';
+const CACHE = 'ledger-v2';
 const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png', 'icons/favicon-32.png'];
 
 self.addEventListener('install', e => {
