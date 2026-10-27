@@ -4,6 +4,7 @@
   const $ = id => document.getElementById(id);
   const WARN_AT = 0.8;
   const KEY = 'spending-ledger-app-v1';
+  const APP_VERSION = '3';
   const SW = ['--c1', '--c2', '--c3', '--c4', '--c5', '--c6', '--c7', '--c8'];
   const GROUPS = ['Cash', 'Bank account', 'Mobile money', 'Card', 'Savings', 'Loan', 'Other'];
   const CURRENCIES = [['USD', 'US dollar'], ['GHS', 'Ghana cedi'], ['NGN', 'Nigerian naira'], ['KES', 'Kenyan shilling'], ['ZAR', 'South African rand'], ['XOF', 'CFA franc (BCEAO)'], ['GBP', 'British pound'], ['EUR', 'Euro'], ['CAD', 'Canadian dollar'], ['INR', 'Indian rupee']];
@@ -590,8 +591,52 @@
       el('div', {}, el('button', { class: 'btn danger small', text: 'Erase everything on this device', onclick: async () => {
         if (await ask({ title: 'Erase all data?', body: 'This deletes every transaction, budget, goal and account on this phone. Back up first if you might need it.', ok: 'Erase everything', danger: true })) { data = fresh(); data.onboarded = false; save(); ui.tab = 'trans'; render(); toast('All data erased.'); }
       } }))));
-    box.append(el('p', { class: 'hint', style: 'text-align:center', text: 'Spending Ledger · works offline · your data never leaves this device' }));
+    box.append(behindTheScenes());
+    box.append(el('p', { class: 'hint', style: 'text-align:center', text: `Spending Ledger v${APP_VERSION} · works offline · your data never leaves this device` }));
     return box;
+  }
+
+  const fmtBytes = n => n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`;
+  function behindTheScenes() {
+    const rows = el('dl', { class: 'kv' });
+    const add = (k, v, id) => rows.append(el('dt', { text: k }), el('dd', { id: id || null, text: v }));
+    const raw = lsGet(KEY) || '';
+    const dates = data.txs.map(t => t.date).sort();
+    const subs = [...data.categories, ...data.incomeCategories].reduce((n, c) => n + (c.subs || []).length, 0);
+    add('Where your data lives', `This phone's browser storage, under "${KEY}"`);
+    add('Size of your data', fmtBytes(new Blob([raw]).size));
+    add('Device storage used / available', 'Checking…', 'bsQuota');
+    add('Protected from automatic clean-up', 'Checking…', 'bsPersist');
+    add('Transactions', `${data.txs.length}${dates.length ? ` (${niceDate(dates[0])} to ${niceDate(dates[dates.length - 1])})` : ''}`);
+    add('Categories', `${data.categories.length} expense, ${data.incomeCategories.length} income, ${subs} subcategories`);
+    add('Accounts · repeating · goals', `${data.accounts.length} · ${data.recurring.length} · ${data.goals.length}`);
+    add('PIN', data.pin ? `On (${data.pin.len} digits, stored only as a salted SHA-256 hash)` : 'Off');
+    add('Last backup', data.lastBackup ? new Date(data.lastBackup).toLocaleString() : 'Never');
+    add('Running as', isStandalone() ? 'Installed app' : 'Web page in the browser');
+    add('Offline copy of the app', 'Checking…', 'bsCache');
+    add('Internet', navigator.onLine ? 'Online' : 'Offline (still works)');
+    add('Server it talks to', 'None. GitHub Pages only delivers the app files.');
+    setTimeout(async () => {
+      try { const e = await navigator.storage.estimate(); $('bsQuota').textContent = `${fmtBytes(e.usage || 0)} of ${fmtBytes(e.quota || 0)}`; } catch { $('bsQuota') && ($('bsQuota').textContent = 'Not reported by this browser'); }
+      try { const p = await navigator.storage.persisted(); $('bsPersist').textContent = p ? 'Yes' : isStandalone() ? 'Not granted, but installed apps are kept' : 'Not yet. Installing the app helps.'; } catch { $('bsPersist') && ($('bsPersist').textContent = 'Not reported by this browser'); }
+      try {
+        const reg = navigator.serviceWorker && await navigator.serviceWorker.getRegistration();
+        const keys = window.caches ? await caches.keys() : [];
+        $('bsCache').textContent = reg && reg.active ? `Ready (${keys.filter(k => k.startsWith('ledger')).join(', ') || 'no cache yet'})` : 'Not set up yet. Open the app online once.';
+      } catch { $('bsCache') && ($('bsCache').textContent = 'Not available'); }
+    }, 0);
+    return el('div', { class: 'panel' }, el('h2', { text: 'Behind the scenes' }),
+      el('p', { class: 'hint', text: 'Ledger has no server. Everything below is read live from this phone.' }), rows,
+      el('div', { class: 'acts', style: 'justify-content:flex-start' }, el('button', { class: 'btn small', text: 'View stored data', onclick: showRawData })));
+  }
+  function showRawData() {
+    const { pin, ...rest } = data;
+    const text = JSON.stringify({ ...rest, pin: pin ? '(hidden)' : null }, null, 2);
+    const pre = el('pre', { class: 'raw', text });
+    const copy = el('button', { class: 'btn small', type: 'button', text: 'Copy', onclick: async () => {
+      try { await navigator.clipboard.writeText(text); toast('Copied.'); } catch { const r = document.createRange(); r.selectNodeContents(pre); const s = getSelection(); s.removeAllRanges(); s.addRange(r); toast('Selected. Use your phone\'s Copy.'); }
+    } });
+    openInfo('Stored data', [el('p', { class: 'hint', text: `Exactly what is saved on this phone (${fmtBytes(new Blob([text]).size)}). The PIN hash is hidden here.` }), pre, el('div', {}, copy)]);
   }
 
   function viewAccounts() {
