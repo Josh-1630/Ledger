@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Spending Ledger</title>
+<meta name="description" content="Private money manager: expenses, income, budgets, goals and insights.">
+<meta name="theme-color" content="#1d6b57">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Ledger">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="format-detection" content="telephone=no">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <h1 id="viewTitle">Transactions</h1>
+    <div class="month" id="monthSwitch" role="group" aria-label="Period">
+      <button id="prev" aria-label="Previous">‹</button>
+      <span id="periodLabel" aria-live="polite"></span>
+      <button id="next" aria-label="Next">›</button>
+    </div>
+  </header>
+
+  <nav class="subtabs" id="subtabs" aria-label="View"></nav>
+
+  <section class="period" id="period" aria-label="Period totals">
+    <div><span class="label">Income</span><span class="big num inc" id="pInc">–</span></div>
+    <div><span class="label">Expenses</span><span class="big num exp" id="pExp">–</span></div>
+    <div><span class="label">Total</span><span class="big num" id="pTot">–</span></div>
+  </section>
+
+  <section class="alerts" id="alerts" aria-live="polite"></section>
+  <div id="banner"></div>
+  <main id="main" class="stack"></main>
+</div>
+
+<button class="fab" id="fab" aria-label="Add a transaction"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+
+<nav class="bottom" id="bottomNav" aria-label="Sections">
+  <button data-tab="trans"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span>Trans.</span></button>
+  <button data-tab="stats"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9h-9z"/><path d="M15 3.5A9 9 0 0 1 20.5 9H15z"/></svg><span>Stats</span></button>
+  <button data-tab="budget"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18a8 8 0 1 1 16 0"/><path d="M12 18l4-6"/></svg><span>Budget</span></button>
+  <button data-tab="goals"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r=".6"/></svg><span>Goals</span></button>
+  <button data-tab="more"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/></svg><span>More</span></button>
+</nav>
+
+<!-- transaction sheet -->
+<div class="overlay" id="sheet" hidden>
+  <form class="sheet" id="sheetForm" role="dialog" aria-modal="true" aria-labelledby="sheetTitle" autocomplete="off">
+    <div class="sheet-head"><h2 id="sheetTitle">New transaction</h2><button type="button" class="icon-btn" id="sheetClose">Close</button></div>
+    <div class="seg" id="typeSeg" role="group" aria-label="Type">
+      <button type="button" data-t="income">Income</button><button type="button" data-t="expense">Expense</button><button type="button" data-t="transfer">Transfer</button>
+    </div>
+    <div class="row2">
+      <div class="field"><label class="label" for="tDate">Date</label><input id="tDate" type="date" required></div>
+      <div class="field"><label class="label" for="tAmount">Amount</label><input id="tAmount" class="amount" inputmode="decimal" placeholder="0.00" required></div>
+    </div>
+    <div class="row2">
+      <div class="field" id="fCat"><label class="label" for="tCat">Category</label><select id="tCat"></select></div>
+      <div class="field" id="fSub" hidden><label class="label" for="tSub">Subcategory</label><select id="tSub"></select></div>
+      <div class="field"><label class="label" for="tAcc" id="tAccLabel">Account</label><select id="tAcc"></select></div>
+      <div class="field" id="fTo" hidden><label class="label" for="tTo">To account</label><select id="tTo"></select></div>
+    </div>
+    <div class="field"><label class="label" for="tNote">Note</label><input id="tNote" maxlength="120" placeholder="e.g. Lunch with team"></div>
+    <div class="field" id="fRepeat"><label class="label" for="tRepeat">Repeat</label>
+      <select id="tRepeat"><option value="">Never</option><option value="weekly">Every week</option><option value="biweekly">Every 2 weeks</option><option value="monthly">Every month</option><option value="yearly">Every year</option></select>
+    </div>
+    <div class="hint" id="tHint"></div>
+    <div class="acts">
+      <button type="button" class="btn danger" id="tDelete" hidden>Delete</button>
+      <span class="spacer"></span>
+      <button type="button" class="btn" id="tMore">Save &amp; add another</button>
+      <button type="submit" class="btn primary" id="tSave">Save</button>
+    </div>
+  </form>
+</div>
+
+<!-- generic form sheet -->
+<div class="overlay" id="formSheet" hidden>
+  <form class="sheet" id="genForm" role="dialog" aria-modal="true" aria-labelledby="genTitle" autocomplete="off">
+    <div class="sheet-head"><h2 id="genTitle"></h2><button type="button" class="icon-btn" id="genClose">Close</button></div>
+    <div id="genBody" class="stack-sm"></div>
+    <div class="acts" id="genActs"></div>
+  </form>
+</div>
+
+<!-- over-budget / confirm -->
+<div class="overlay center" id="confirm" hidden>
+  <div class="modal" role="alertdialog" aria-modal="true" aria-labelledby="mTitle" aria-describedby="mBody">
+    <h2 id="mTitle"></h2>
+    <p id="mBody"></p>
+    <div class="facts" id="mFacts"></div>
+    <div class="acts"><button class="btn" id="mCancel">Cancel</button><button class="btn primary" id="mConfirm">OK</button></div>
+  </div>
+</div>
+
+<!-- PIN lock -->
+<div class="lock" id="lock" hidden>
+  <div class="lock-inner">
+    <img src="icons/icon-192.png" alt="" width="72" height="72">
+    <h2 id="lockTitle">Enter your PIN</h2>
+    <div class="pin-dots" id="pinDots" aria-hidden="true"></div>
+    <p class="hint" id="lockMsg">&nbsp;</p>
+    <div class="pad" id="pad"></div>
+    <button class="linkbtn" id="forgot">Forgot PIN?</button>
+  </div>
+</div>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+<input type="file" id="fileIn" accept=".json,.csv,application/json,text/csv" hidden>
+<script src="app.js"></script>
+</body>
+</html>

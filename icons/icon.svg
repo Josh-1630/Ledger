@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#1d6b57"/>
+  <circle cx="256" cy="256" r="236" fill="#22806a" opacity=".55"/>
+  <!-- wallet body -->
+  <rect x="112" y="150" width="288" height="212" rx="34" fill="#f4efe4"/>
+  <rect x="112" y="150" width="288" height="56" rx="28" fill="#e6dccb"/>
+  <!-- clasp -->
+  <rect x="300" y="226" width="124" height="80" rx="40" fill="#e0603f"/>
+  <circle cx="340" cy="266" r="16" fill="#f4efe4"/>
+  <!-- ledger lines -->
+  <rect x="146" y="238" width="112" height="16" rx="8" fill="#1d6b57"/>
+  <rect x="146" y="274" width="76" height="16" rx="8" fill="#1d6b57" opacity=".55"/>
+  <rect x="146" y="310" width="96" height="16" rx="8" fill="#1d6b57" opacity=".3"/>
+</svg>

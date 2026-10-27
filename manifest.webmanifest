@@ -1,0 +1,17 @@
+{
+  "name": "Spending Ledger",
+  "short_name": "Ledger",
+  "description": "Private money manager: expenses, income, budgets, goals and insights. Data stays on your device.",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f3f5f4",
+  "theme_color": "#1d6b57",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
