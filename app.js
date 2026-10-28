@@ -4,7 +4,7 @@
   const $ = id => document.getElementById(id);
   const WARN_AT = 0.8;
   const KEY = 'spending-ledger-app-v1';
-  const APP_VERSION = '4';
+  const APP_VERSION = '5';
   const SNAP_KEY = 'spending-ledger-safety-copy';
   const SW = ['--c1', '--c2', '--c3', '--c4', '--c5', '--c6', '--c7', '--c8'];
   const GROUPS = ['Cash', 'Bank account', 'Mobile money', 'Card', 'Savings', 'Loan', 'Other'];
@@ -730,44 +730,81 @@
     openInfo('Stored data', [el('p', { class: 'hint', text: `Exactly what is saved on this phone (${fmtBytes(new Blob([text]).size)}). The PIN hash is hidden here.` }), pre, el('div', {}, copy)]);
   }
 
+  // Only cards and loans can hold debt. A cash, bank or mobile money account below zero
+  // means its real balance was never entered, so it is flagged instead of counted as owed.
+  const DEBT_GROUPS = ['Card', 'Loan'];
+  const isDebt = a => DEBT_GROUPS.includes(a.group);
+  function accountSummary() {
+    let assets = 0, owed = 0; const short = [];
+    const bals = new Map(data.accounts.map(a => {
+      const b = balanceOf(a);
+      if (isDebt(a) && b < 0) owed += -b; else assets += b;
+      if (!isDebt(a) && b < 0) short.push([a, b]);
+      return [a.id, b];
+    }));
+    return { assets, owed, net: assets - owed, bals, short };
+  }
   function viewAccounts() {
-    let assets = 0, liab = 0;
-    const bals = new Map(data.accounts.map(a => { const b = balanceOf(a); if (b >= 0) assets += b; else liab += b; return [a.id, b]; }));
+    const { assets, owed, net, bals, short } = accountSummary();
     const body = el('div', { class: 'panel' }, el('div', { class: 'panel-head' }, el('h2', { text: 'Accounts' }), el('button', { class: 'linkbtn', text: '+ Add', onclick: () => { ui.editAccount = 'new'; render(); focusFirst(); } })),
       el('div', { class: 'figs3' },
-        el('div', {}, el('span', { class: 'label', text: 'Assets' }), el('span', { class: 'big num inc', text: money(assets) })),
-        el('div', {}, el('span', { class: 'label', text: 'Owed' }), el('span', { class: 'big num exp', text: money(Math.abs(liab)) })),
-        el('div', {}, el('span', { class: 'label', text: 'Net worth' }), el('span', { class: 'big num', text: money(assets + liab) }))));
+        el('div', {}, el('span', { class: 'label', text: 'Assets' }), el('span', { class: `big num ${assets < 0 ? 'exp' : 'inc'}`, text: money(assets) })),
+        el('div', {}, el('span', { class: 'label', text: 'Owed' }), el('span', { class: `big num ${owed ? 'exp' : ''}`, text: money(owed) })),
+        el('div', {}, el('span', { class: 'label', text: 'Net worth' }), el('span', { class: 'big num', text: money(net) }))),
+      el('p', { class: 'hint', text: 'Assets is the money in your cash, bank, mobile money and savings accounts. Owed is what you still owe on cards and loans. Net worth is assets minus owed.' }));
+    short.forEach(([a, b]) => body.append(el('div', { class: 'alert warn' }, el('span', { class: 'sign', text: '!' }), el('div', { class: 'grow' },
+      el('strong', { text: `${a.name} shows ${money(b)}` }),
+      el('span', { class: 'hint', text: `You've recorded ${money(-b)} more going out of ${a.name} than coming in, because its real balance was never entered. Enter how much is in it right now and Ledger will correct it.` }),
+      el('div', { class: 'acts', style: 'justify-content:flex-start' }, el('button', { class: 'btn primary small', type: 'button', text: 'Set balance', onclick: () => { ui.editAccount = a.id; render(); focusFirst(); } }))))));
     GROUPS.forEach(g => {
       const accs = data.accounts.filter(a => (a.group || 'Other') === g); if (!accs.length) return;
-      const grp = el('div', { class: 'acc-group' }, el('h3', {}, el('span', { text: g }), el('span', { class: 'num', text: money(accs.reduce((s, a) => s + bals.get(a.id), 0)) })));
+      const debt = DEBT_GROUPS.includes(g);
+      const sum = accs.reduce((s, a) => s + bals.get(a.id), 0);
+      const grp = el('div', { class: 'acc-group' }, el('h3', {}, el('span', { text: g }), el('span', { class: 'num', text: debt && sum < 0 ? `owe ${money(-sum)}` : money(sum) })));
       const rows = el('div', { class: 'row-list' });
-      accs.forEach(a => rows.append(ui.editAccount === a.id ? accountEditor(a) : el('div', { class: 'row-item' }, el('span', { class: 'grow', text: a.name }),
-        el('span', { class: `num ${bals.get(a.id) < 0 ? 'exp' : 'inc'}`, text: money(bals.get(a.id)) }), el('button', { class: 'icon-btn', text: 'Edit', onclick: () => { ui.editAccount = a.id; render(); focusFirst(); } }))));
+      accs.forEach(a => {
+        const b = bals.get(a.id);
+        rows.append(ui.editAccount === a.id ? accountEditor(a, b) : el('div', { class: 'row-item' }, el('span', { class: 'grow', text: a.name }),
+          el('span', { class: `num ${b < 0 ? 'exp' : 'inc'}`, text: debt && b < 0 ? `owe ${money(-b)}` : money(b) }),
+          el('button', { class: 'icon-btn', text: 'Edit', onclick: () => { ui.editAccount = a.id; render(); focusFirst(); } })));
+      });
       grp.append(rows); body.append(grp);
     });
-    if (ui.editAccount === 'new') body.append(accountEditor(null));
+    if (ui.editAccount === 'new') body.append(accountEditor(null, 0));
     return body;
   }
-  function accountEditor(a) {
+  function accountEditor(a, balance) {
     const name = el('input', { id: 'aName', maxlength: 40, required: true }); name.value = a ? a.name : '';
     const grp = el('select', { id: 'aGroup' }, GROUPS.map(g => el('option', { value: g, text: g }))); grp.value = a ? a.group || 'Other' : 'Bank account';
-    const open = el('input', { id: 'aOpen', class: 'num', inputmode: 'decimal', placeholder: '0.00' }); open.value = a ? ((a.openingCents || 0) / 100).toFixed(2) : '';
+    const amt = el('input', { id: 'aBal', class: 'num', inputmode: 'decimal', placeholder: '0.00' });
+    const label = el('label', { class: 'label', for: 'aBal' }), hint = el('span', { class: 'hint' });
+    const debtNow = () => DEBT_GROUPS.includes(grp.value);
+    const sync = () => {
+      label.textContent = debtNow() ? 'Amount you owe right now' : 'Balance right now';
+      hint.textContent = debtNow() ? 'Type it as a normal number, e.g. 500. Enter 0 if you owe nothing.' : 'What is actually in it today. Ledger works out the rest from your entries.';
+    };
+    if (a && (debtNow() || balance >= 0)) amt.value = ((debtNow() ? Math.max(0, -balance) : balance) / 100).toFixed(2);
+    if (a && !debtNow() && balance < 0) amt.placeholder = 'e.g. 300.00';
+    grp.onchange = () => { const v = parseAmount(amt.value, true); if (v != null && a) amt.value = (Math.abs(v) / 100).toFixed(2); sync(); };
+    sync();
     const done = () => { ui.editAccount = null; render(); };
     return el('form', { class: 'edit-grid budget', onsubmit: e => {
       e.preventDefault(); const n = name.value.trim(); if (!n) return;
-      const oc = open.value.trim() ? parseAmount(open.value, true) : 0;
-      if (oc == null) { toast('Enter the starting balance as a number. Use a minus sign for money owed.', 'warn'); return; }
-      if (a) Object.assign(a, { name: n, group: grp.value, openingCents: oc }); else data.accounts.push({ id: uid(), name: n, group: grp.value, openingCents: oc });
-      save(); done(); toast(`${n} saved.`);
+      let target = amt.value.trim() ? parseAmount(amt.value, true) : 0;
+      if (target == null) { toast('Enter the amount as a number, like 250 or 250.00.', 'warn'); return; }
+      if (debtNow()) target = -Math.abs(target);
+      // Choose the starting balance that makes today's balance equal what was typed.
+      const movement = a ? balance - (a.openingCents || 0) : 0;
+      const openingCents = target - movement;
+      if (a) Object.assign(a, { name: n, group: grp.value, openingCents }); else data.accounts.push({ id: uid(), name: n, group: grp.value, openingCents });
+      save(); done(); toast(`${n} saved. Balance set to ${debtNow() && target < 0 ? `owe ${money(-target)}` : money(target)}.`);
     } },
       el('div', { class: 'field' }, el('label', { class: 'label', for: 'aName', text: 'Account name' }), name),
       el('div', { class: 'field' }, el('label', { class: 'label', for: 'aGroup', text: 'Group' }), grp),
-      el('div', { class: 'field' }, el('label', { class: 'label', for: 'aOpen', text: 'Starting balance' }), open),
+      el('div', { class: 'field full' }, label, amt, hint),
       el('div', { class: 'acts' }, el('button', { class: 'btn primary small', type: 'submit', text: 'Save' }), el('button', { class: 'btn small', type: 'button', text: 'Cancel', onclick: done }),
         a ? armDelete(el('button', { class: 'btn danger small', type: 'button', text: 'Delete' }), () => { data.accounts = data.accounts.filter(x => x.id !== a.id); save(); done(); toast(`${a.name} deleted. Its transactions are kept.`); }) : null));
   }
-
   function viewRecurring() {
     const panel = el('div', { class: 'panel' }, el('h2', { text: 'Repeating entries' }));
     if (!data.recurring.length) { panel.append(el('p', { class: 'hint', text: 'Rent, salary, subscriptions. When adding a transaction, set "Repeat" and Ledger adds it for you on each due date.' })); return panel; }
@@ -1332,6 +1369,8 @@
     openInfo(`What's new in v${APP_VERSION}`, [
       el('p', { class: 'hint', text: 'All your transactions, budgets, goals and settings carried over.' }),
       el('ul', { class: 'steps' },
+        li('Accounts fixed: "Owed" now only counts cards and loans. Cash, bank or mobile money below zero is flagged with a Set balance button instead of being shown as debt.'),
+        li('Accounts now ask for the balance right now, so you type what is really in your wallet, bank or MoMo.'),
         li('Changing or removing your PIN now asks for your current PIN first.'),
         li('Forgot PIN works: reset it with a recovery code or a security question, without losing any data.'),
         li('A livelier look: summary card with what is left to spend, category badges, animated totals and bars.'),
