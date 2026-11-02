@@ -71,6 +71,9 @@
       <div class="field"><label class="label" for="tDate">Date</label><input id="tDate" type="date" required></div>
       <div class="field"><label class="label" for="tAmount">Amount</label><input id="tAmount" class="amount" inputmode="decimal" placeholder="0.00" required></div>
     </div>
+    <div class="field" id="fPick"><span class="label">Category</span>
+      <button type="button" class="pick-btn" id="pickBtn" aria-haspopup="dialog"><span class="avatar" id="pickAv" aria-hidden="true"></span><span class="pick-txt"><b id="pickName"></b><small id="pickSub"></small></span><span class="chev" aria-hidden="true">›</span></button>
+    </div>
     <div class="row2">
       <div class="field" id="fCat"><label class="label" for="tCat">Category</label><select id="tCat"></select></div>
       <div class="field" id="fSub" hidden><label class="label" for="tSub">Subcategory</label><select id="tSub"></select></div>
@@ -89,6 +92,14 @@
       <button type="submit" class="btn primary" id="tSave">Save</button>
     </div>
   </form>
+</div>
+
+<!-- category picker -->
+<div class="overlay picker" id="picker" hidden>
+  <div class="sheet pick-sheet" role="dialog" aria-modal="true" aria-labelledby="pickTitle">
+    <div class="sheet-head"><button type="button" class="icon-btn" id="pickBack" hidden>‹ Back</button><h2 id="pickTitle">Choose a category</h2><button type="button" class="icon-btn" id="pickClose">Close</button></div>
+    <div id="pickBody" class="stack-sm"></div>
+  </div>
 </div>
 
 <!-- generic form sheet -->

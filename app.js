@@ -4,7 +4,7 @@
   const $ = id => document.getElementById(id);
   const WARN_AT = 0.8;
   const KEY = 'spending-ledger-app-v1';
-  const APP_VERSION = '6';
+  const APP_VERSION = '7';
   const SNAP_KEY = 'spending-ledger-safety-copy';
   const SW = ['--c1', '--c2', '--c3', '--c4', '--c5', '--c6', '--c7', '--c8'];
   const GROUPS = ['Cash', 'Bank account', 'Mobile money', 'Card', 'Savings', 'Loan', 'Other'];
@@ -56,6 +56,10 @@
     for (const k of ['categories', 'incomeCategories', 'accounts', 'txs', 'recurring', 'goals']) if (!Array.isArray(d[k])) d[k] = f[k];
     d.currency = d.currency || 'USD';
     d.txs.forEach(t => { t.type = t.type || 'expense'; t.month = t.month || monthOf(t.date); });
+    if (d.carryOver === undefined) d.carryOver = true;
+    if (d.rollover === undefined) d.rollover = true;
+    // Limits set before rollover existed count from last month, so last month's unspent budget carries in.
+    d.categories.forEach(c => { if (c.limitCents != null && !c.limitSince) c.limitSince = shiftMonth(monthOf(todayISO()), -1); });
     return d;
   }
   let data;
@@ -69,7 +73,9 @@
     lsSet(KEY, JSON.stringify(data));
   }
   let persistAsked = false;
+  const memo = new Map();
   function save() {
+    memo.clear();
     if (!lsSet(KEY, JSON.stringify(data))) toast("Couldn't save on this device. Storage may be full or blocked.", 'over');
     if (!persistAsked && navigator.storage && navigator.storage.persist) { persistAsked = true; navigator.storage.persist().catch(() => {}); }
   }
@@ -88,6 +94,20 @@
   const totals = list => { let inc = 0, exp = 0; list.forEach(t => { if (t.type === 'income') inc += t.amountCents; else if (t.type === 'expense') exp += t.amountCents; }); return { inc, exp, tot: inc - exp }; };
   const spentIn = (list, catId, skipId) => list.reduce((s, t) => s + (t.type === 'expense' && t.categoryId === catId && t.id !== skipId ? t.amountCents : 0), 0);
   const levelOf = (spent, limit) => limit == null ? 'none' : spent > limit ? 'over' : spent >= limit * WARN_AT ? 'warn' : 'ok';
+  /* ---------- month to month ---------- */
+  const memoGet = (k, fn) => { if (!memo.has(k)) memo.set(k, fn()); return memo.get(k); };
+  // Money brought into month m: what was left (income minus spending) at the end of every earlier month.
+  function carryIn(m) {
+    if (data.carryOver === false) return 0;
+    return memoGet(`carry|${m}`, () => data.txs.reduce((s, t) => t.month >= m ? s : s + (t.type === 'income' ? t.amountCents : t.type === 'expense' ? -t.amountCents : 0), 0));
+  }
+  // A category's limit in month m: its monthly limit plus whatever it left unspent the month before.
+  function limitFor(c, m) {
+    if (!c || c.limitCents == null) return null;
+    if (data.rollover === false || !c.limitSince || m <= c.limitSince) return c.limitCents;
+    return memoGet(`lim|${c.id}|${m}`, () => { const p = shiftMonth(m, -1); return c.limitCents + Math.max(0, limitFor(c, p) - spentIn(monthTxs(p), c.id)); });
+  }
+  const rolledIn = (c, m) => { const l = limitFor(c, m); return l == null ? 0 : l - c.limitCents; };
   function balanceOf(a) {
     let b = a.openingCents || 0;
     data.txs.forEach(t => {
@@ -206,21 +226,23 @@
   }
   function renderHero(show) {
     const h = $('hero'); h.hidden = !show; if (!show) return;
-    const mt = monthTxs(), t = totals(mt), isCur = ui.month === monthOf(todayISO());
+    const mt = monthTxs(), t = totals(mt), isCur = ui.month === monthOf(todayISO()), carry = carryIn(ui.month);
     const capped = data.categories.filter(c => c.limitCents != null);
-    const budget = capped.reduce((s, c) => s + c.limitCents, 0), used = capped.reduce((s, c) => s + spentIn(mt, c.id), 0);
+    const budget = capped.reduce((s, c) => s + limitFor(c, ui.month), 0), used = capped.reduce((s, c) => s + spentIn(mt, c.id), 0);
     const hr = new Date().getHours(), greet = hr < 12 ? 'Good morning' : hr < 17 ? 'Good afternoon' : 'Good evening';
     const today = data.txs.reduce((s, x) => s + (x.type === 'expense' && x.date === todayISO() ? x.amountCents : 0), 0);
     const pct = budget ? Math.min(100, used / budget * 100) : null;
+    const prevName = monthName(shiftMonth(ui.month, -1), { month: 'short' });
     h.replaceChildren(...[
       el('div', { class: 'hero-top' }, el('span', { class: 'hero-greet', text: isCur ? greet : monthName(ui.month) }), isCur ? el('span', { class: 'hero-chip num', text: `Today ${money(today)}` }) : null),
-      el('div', { class: 'hero-label', text: budget ? 'Left to spend this month' : 'Net this month' }),
-      el('div', { class: 'hero-big num', 'data-k': 'heroBig', 'data-cents': budget ? budget - used : t.tot, 'data-signed': '1' }),
+      el('div', { class: 'hero-label', text: data.carryOver === false ? 'Net this month' : 'Money left this month' }),
+      el('div', { class: 'hero-big num', 'data-k': 'heroBig', 'data-cents': carry + t.tot, 'data-signed': '1' }),
       el('div', { class: 'hero-row' },
+        carry ? el('span', {}, el('i', { class: 'arrow', text: '↪' }), `From ${prevName} `, el('b', { class: 'num', 'data-k': 'heroCarry', 'data-cents': carry })) : null,
         el('span', {}, el('i', { class: 'arrow', text: '↑' }), 'In ', el('b', { class: 'num', 'data-k': 'heroInc', 'data-cents': t.inc })),
         el('span', {}, el('i', { class: 'arrow', text: '↓' }), 'Out ', el('b', { class: 'num', 'data-k': 'heroExp', 'data-cents': t.exp }))),
       pct != null ? el('div', { class: 'hero-meter', role: 'img', 'aria-label': `${Math.round(pct)}% of budget used` }, el('i', { class: levelOf(used, budget), style: `width:${pct}%` })) : null,
-      el('div', { class: 'hero-foot', text: pct != null ? `${Math.round(pct)}% of your ${money(budget)} monthly budget used` : 'Set limits in Budget to see how much is left to spend.' })].filter(Boolean));
+      el('div', { class: 'hero-foot', text: pct != null ? `${money(budget - used)} of your ${money(budget)} budget left to spend` : 'Set limits in Budget to see how much is left to spend.' })].filter(Boolean));
     countUp(h);
   }
   function burst(type) {
@@ -240,13 +262,13 @@
     if (!['trans', 'budget'].includes(ui.tab)) return;
     const mt = monthTxs();
     data.categories.forEach(c => {
-      if (c.limitCents == null) return;
-      const spent = spentIn(mt, c.id), lvl = levelOf(spent, c.limitCents);
+      const lim = limitFor(c, ui.month); if (lim == null) return;
+      const spent = spentIn(mt, c.id), lvl = levelOf(spent, lim);
       if (lvl !== 'over' && lvl !== 'warn') return;
       box.append(el('div', { class: `alert ${lvl}`, role: 'status' },
         el('span', { class: 'sign', text: lvl === 'over' ? '!' : '≈' }),
-        el('div', {}, el('strong', { text: lvl === 'over' ? `${c.name} is over budget by ${money(spent - c.limitCents)}` : `${c.name} is at ${Math.round(spent / c.limitCents * 100)}% of its budget` }),
-          el('span', { class: 'hint', text: `${money(spent)} of ${money(c.limitCents)} in ${monthName(ui.month)}` }))));
+        el('div', {}, el('strong', { text: lvl === 'over' ? `${c.name} is over budget by ${money(spent - lim)}` : `${c.name} is at ${Math.round(spent / lim * 100)}% of its budget` }),
+          el('span', { class: 'hint', text: `${money(spent)} of ${money(lim)} in ${monthName(ui.month)}` }))));
     });
   }
 
@@ -326,11 +348,18 @@
     }) : monthTxs();
     dailyList.replaceChildren();
     if (q) { const t = totals(list); dailyList.append(el('div', { class: 'hint', text: `${list.length} match${list.length === 1 ? '' : 'es'} in all months · ${money(t.exp)} spent · ${money(t.inc)} received` })); }
+    const carry = q ? 0 : carryIn(ui.month);
+    const carryCard = carry ? el('section', { class: 'day carry' }, el('div', { class: 'carry-row' },
+      el('span', { class: 'avatar', style: '--c:var(--accent)', 'aria-hidden': 'true', text: '↪' }),
+      el('span', { class: 'what' }, el('div', { class: 't1', text: `Brought forward from ${monthName(shiftMonth(ui.month, -1), { month: 'long' })}` }), el('div', { class: 'acc', text: 'What was left at the end of last month' })),
+      el('span', { class: `amt num ${carry < 0 ? 'exp' : 'inc'}`, text: money(carry) }))) : null;
     if (!list.length) {
+      if (carryCard) dailyList.append(carryCard);
       dailyList.append(el('div', { class: 'empty-state center' }, q ? null : el('img', { src: 'icons/icon-192.png', alt: '', width: 56, height: 56, class: 'empty-ico' }), el('div', { text: q ? 'Nothing matches that search.' : `No transactions in ${monthName(ui.month)} yet. Tap + to add your first one.` })));
       return;
     }
     groupByDay(list).forEach(([d, l], i) => { const card = dayCard(d, l); card.style.setProperty('--d', Math.min(i, 8)); dailyList.append(card); });
+    if (carryCard) { carryCard.style.setProperty('--d', 8); dailyList.append(carryCard); }
   }
   function viewDaily() { fillDaily(); return el('div', { class: 'stack' }, searchInput, dailyList); }
 
@@ -360,16 +389,17 @@
 
   /* ---------- Trans: monthly ---------- */
   function viewMonthly() {
-    const y = ui.month.slice(0, 4), cur = monthOf(todayISO()), tbody = el('tbody'), all = { inc: 0, exp: 0 };
+    const y = ui.month.slice(0, 4), cur = monthOf(todayISO()), tbody = el('tbody'), all = { inc: 0, exp: 0 }, carryCol = data.carryOver !== false;
     const go = key => { ui.month = key; ui.sub.trans = 'daily'; render(); };
     for (let m = 1; m <= 12; m++) {
       const key = `${y}-${pad(m)}`, t = totals(monthTxs(key)); all.inc += t.inc; all.exp += t.exp;
       tbody.append(el('tr', { class: `row${key === cur ? ' cur' : ''}`, tabindex: 0, onclick: () => go(key), onkeydown: e => { if (e.key === 'Enter') go(key); } },
-        el('td', { text: monthName(key, { month: 'short' }) }), el('td', { class: 'inc', text: t.inc ? money(t.inc) : '–' }), el('td', { class: 'exp', text: t.exp ? money(t.exp) : '–' }), el('td', { text: t.inc || t.exp ? money(t.tot) : '–' })));
+        el('td', { text: monthName(key, { month: 'short' }) }), el('td', { class: 'inc', text: t.inc ? money(t.inc) : '–' }), el('td', { class: 'exp', text: t.exp ? money(t.exp) : '–' }), el('td', { text: t.inc || t.exp ? money(t.tot) : '–' }),
+        carryCol ? el('td', { class: 'bal', text: key <= cur || t.inc || t.exp ? money(carryIn(shiftMonth(key, 1))) : '–' }) : null));
     }
     return el('div', { class: 'panel' }, el('div', { class: 'scroll-x' }, el('table', { class: 'mtable' },
-      el('thead', {}, el('tr', {}, ['Month', 'Income', 'Expenses', 'Total'].map(h => el('th', { text: h })))), tbody,
-      el('tfoot', {}, el('tr', {}, el('td', { text: y }), el('td', { class: 'inc', text: money(all.inc) }), el('td', { class: 'exp', text: money(all.exp) }), el('td', { text: money(all.inc - all.exp) }))))));
+      el('thead', {}, el('tr', {}, ['Month', 'Income', 'Expenses', 'Total', ...(carryCol ? ['Left at month end'] : [])].map(h => el('th', { text: h })))), tbody,
+      el('tfoot', {}, el('tr', {}, el('td', { text: y }), el('td', { class: 'inc', text: money(all.inc) }), el('td', { class: 'exp', text: money(all.exp) }), el('td', { text: money(all.inc - all.exp) }), carryCol ? el('td') : null)))));
   }
 
   /* ---------- Stats: categories ---------- */
@@ -418,7 +448,7 @@
     };
     const rate = cur.inc ? Math.round((cur.inc - cur.exp) / cur.inc * 100) : null;
     const avg = elapsed ? Math.round(cur.exp / elapsed) : 0;
-    const budget = data.categories.reduce((s, c) => s + (c.limitCents || 0), 0);
+    const budget = data.categories.reduce((s, c) => s + (limitFor(c, m) || 0), 0);
     const proj = isCur ? avg * daysIn(m) : null;
     const kpis = el('div', { class: 'kpis' },
       el('div', { class: 'kpi' }, el('span', { class: 'label', text: 'Spent' }), el('span', { class: 'big num exp', text: money(cur.exp) }), delta(cur.exp, prev.exp, true)),
@@ -474,7 +504,8 @@
   /* ---------- Budget ---------- */
   function viewBudget() {
     const mt = monthTxs(), capped = data.categories.filter(c => c.limitCents != null);
-    const budget = capped.reduce((s, c) => s + c.limitCents, 0), spent = capped.reduce((s, c) => s + spentIn(mt, c.id), 0);
+    const budget = capped.reduce((s, c) => s + limitFor(c, ui.month), 0), spent = capped.reduce((s, c) => s + spentIn(mt, c.id), 0);
+    const rolled = capped.reduce((s, c) => s + rolledIn(c, ui.month), 0);
     const isCur = ui.month === monthOf(todayISO()), daysLeft = isCur ? daysIn(ui.month) - new Date().getDate() + 1 : 0, left = budget - spent;
     const head = el('div', { class: 'panel' },
       el('div', { class: 'figs3' },
@@ -482,7 +513,8 @@
         el('div', {}, el('span', { class: 'label', text: 'Left' }), el('span', { class: `big num${left < 0 ? ' exp' : ''}`, text: budget ? money(left) : '–' })),
         el('div', {}, el('span', { class: 'label', text: 'Per day' }), el('span', { class: 'big num', text: budget && isCur ? money(Math.max(0, Math.floor(left / daysLeft))) : '–' }))),
       budget ? el('div', { class: 'bar' }, el('i', { class: levelOf(spent, budget), style: `width:${Math.min(100, spent / budget * 100)}%` }))
-        : el('div', { class: 'hint', text: 'Tap Edit on a category to give it a monthly limit. You get a warning at 80% and a prompt before anything takes it over.' }));
+        : el('div', { class: 'hint', text: 'Tap Edit on a category to give it a monthly limit. You get a warning at 80% and a prompt before anything takes it over.' }),
+      rolled ? el('div', { class: 'hint', text: `Includes ${money(rolled)} of unspent budget rolled over from ${monthName(shiftMonth(ui.month, -1), { month: 'long' })}.` }) : null);
     const list = el('div', {});
     data.categories.forEach(c => list.append(ui.editBudget === c.id ? budgetEditor(c) : budgetRow(c, mt)));
     if (ui.editBudget === 'new') list.append(budgetEditor(null));
@@ -502,15 +534,17 @@
     return el('div', { class: 'sub-split' }, [...parts.entries()].sort((a, b) => b[1] - a[1]).map(([n, v]) => el('span', {}, `${n} `, el('b', { class: 'num', text: money(v) }))));
   }
   function budgetRow(c, mt) {
-    const spent = spentIn(mt, c.id), lvl = levelOf(spent, c.limitCents), rest = (c.limitCents || 0) - spent;
+    const lim = limitFor(c, ui.month), extra = rolledIn(c, ui.month);
+    const spent = spentIn(mt, c.id), lvl = levelOf(spent, lim), rest = (lim || 0) - spent;
     return el('div', { class: 'budget' },
       el('div', { class: 'b-row' },
         el('div', { class: 'b-name' }, el('span', { class: 'swatch', style: `background:var(${c.color})` }), el('span', { text: c.name })),
         el('span', { class: `pill ${lvl}`, text: { ok: 'On track', warn: 'Near limit', over: 'Over budget', none: 'No limit' }[lvl] }),
         el('button', { class: 'icon-btn', text: 'Edit', 'aria-label': `Edit ${c.name}`, onclick: () => { ui.editBudget = c.id; render(); focusFirst(); } })),
       subSplit(c, mt),
-      el('div', { class: 'b-fig num' }, el('b', { text: money(spent) }), c.limitCents == null ? ' spent' : ` of ${money(c.limitCents)} · ${rest >= 0 ? money(rest) + ' left' : money(-rest) + ' over'}`),
-      c.limitCents != null ? el('div', { class: 'bar' }, el('i', { class: lvl, style: `width:${Math.min(100, c.limitCents ? spent / c.limitCents * 100 : 100)}%` })) : null);
+      el('div', { class: 'b-fig num' }, el('b', { text: money(spent) }), lim == null ? ' spent' : ` of ${money(lim)} · ${rest >= 0 ? money(rest) + ' left' : money(-rest) + ' over'}`),
+      extra ? el('div', { class: 'rollover', text: `↪ ${money(c.limitCents)} limit + ${money(extra)} rolled over from ${monthName(shiftMonth(ui.month, -1), { month: 'short' })}` }) : null,
+      lim != null ? el('div', { class: 'bar' }, el('i', { class: lvl, style: `width:${Math.min(100, lim ? spent / lim * 100 : 100)}%` })) : null);
   }
   function subsEditor(subs) {
     const list = el('div', { class: 'subs-ed' });
@@ -536,7 +570,8 @@
       e.preventDefault(); const n = name.value.trim(); if (!n) return;
       const lc = lim.value.trim() ? parseAmount(lim.value) : null;
       if (lim.value.trim() && lc == null) { toast('Enter the limit as a number, like 250 or 250.00.', 'warn'); return; }
-      if (c) Object.assign(c, { name: n, limitCents: lc, subs: subs.collect() }); else data.categories.push({ id: uid(), name: n, limitCents: lc, subs: subs.collect(), color: SW[data.categories.length % SW.length] });
+      const since = lc == null ? null : c && c.limitCents != null && c.limitSince ? c.limitSince : ui.month;
+      if (c) Object.assign(c, { name: n, limitCents: lc, limitSince: since, subs: subs.collect() }); else data.categories.push({ id: uid(), name: n, limitCents: lc, limitSince: since, subs: subs.collect(), color: SW[data.categories.length % SW.length] });
       save(); done(); toast(`${n} saved.`);
     } },
       el('div', { class: 'field' }, el('label', { class: 'label', for: 'bName', text: 'Category name' }), name),
@@ -645,6 +680,11 @@
       el('div', { class: 'seg', role: 'group', 'aria-label': 'Theme' }, [['system', 'Match phone'], ['light', 'Light'], ['dark', 'Dark']].map(([k, label]) =>
         el('button', { type: 'button', 'aria-pressed': String(th === k), text: label, onclick: () => { applyTheme(k); render(); } }))),
       el('p', { class: 'hint', text: th === 'system' ? `Following your phone's setting (currently ${darkMQ.matches ? 'dark' : 'light'}).` : `Always ${th}. The sun/moon button at the top switches quickly.` })));
+    const toggle = (label, desc, on, fn) => el('div', { class: 'row-item' }, el('span', { class: 'grow' }, label, el('div', { class: 'sub', text: desc })),
+      el('button', { class: 'switch', type: 'button', role: 'switch', 'aria-checked': String(on), 'aria-label': label, onclick: fn }));
+    box.append(el('div', { class: 'panel' }, el('h2', { text: 'Month to month' }), el('div', { class: 'row-list' },
+      toggle('Carry money forward', 'What is left at the end of a month (income minus spending) starts the next month.', data.carryOver !== false, () => { data.carryOver = data.carryOver === false; save(); render(); toast(data.carryOver ? 'Leftover money now carries into the next month.' : 'Each month now starts from zero.'); }),
+      toggle('Roll over unspent budget', 'Budget a category did not use is added to its limit next month.', data.rollover !== false, () => { data.rollover = data.rollover === false; save(); render(); toast(data.rollover ? 'Unspent budget now rolls over.' : 'Budgets now reset each month.'); }))));
     box.append(viewRecurring());
     // security
     const pinRow = (label, value, btnLabel, fn) => el('div', { class: 'row-item' }, el('span', { class: 'grow' }, label, el('div', { class: 'sub', text: value })), el('button', { class: 'btn small', type: 'button', text: btnLabel, onclick: fn }));
@@ -777,13 +817,14 @@
     const subs = sheet.type === 'transfer' || !c ? [] : c.subs || [];
     $('fSub').hidden = !subs.length;
     fillSelect($('tSub'), [['', 'None']].concat(subs.map(x => [x.id, x.name])), keep);
+    pickLabel();
   }
   function setType(t) {
     sheet.type = t;
     $('typeSeg').querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.t === t)));
-    $('fCat').hidden = t === 'transfer'; $('fTo').hidden = t !== 'transfer';
+    $('fCat').hidden = t === 'transfer'; $('fPick').hidden = t === 'transfer'; $('fTo').hidden = t !== 'transfer';
     $('tAccLabel').textContent = t === 'transfer' ? 'From account' : 'Account';
-    const cats = (t === 'income' ? data.incomeCategories : data.categories).map(c => [c.id, c.name + (t === 'expense' && c.limitCents != null ? ` · limit ${money(c.limitCents)}` : '')]);
+    const cats = (t === 'income' ? data.incomeCategories : data.categories).map(c => [c.id, c.name]);
     fillSelect($('tCat'), cats.length ? cats : [['', 'No categories yet']]);
     fillSubs();
     const accs = data.accounts.map(a => [a.id, a.name]);
@@ -810,20 +851,19 @@
     $('sheet').hidden = false; sheetHint();
     setTimeout(() => $('tAmount').focus(), 60);
   }
-  const closeSheet = () => { $('sheet').hidden = true; sheet.editing = null; };
+  const closeSheet = () => { $('sheet').hidden = true; sheet.editing = null; closePicker(); };
   $('sheetClose').onclick = closeSheet;
   $('sheet').addEventListener('click', e => { if (e.target === $('sheet')) closeSheet(); });
   $('fab').onclick = () => openTxSheet(null, ui.tab === 'trans' && ui.sub.trans === 'calendar' && ui.calDay ? ui.calDay : null);
 
   function sheetHint() {
-    const h = $('tHint'); h.className = 'hint'; h.textContent = '';
+    const h = $('tHint'); h.className = 'hint'; h.textContent = ''; pickLabel();
     if (sheet.editing && sheet.editing.recurringId) h.textContent = 'Part of a repeating entry. Changes apply to this one only; manage the schedule under More.';
     if (sheet.type !== 'expense') return;
-    const c = expCat($('tCat').value); if (!c || c.limitCents == null) return;
-    const m = monthOf($('tDate').value || todayISO());
+    const c = expCat($('tCat').value), m = monthOf($('tDate').value || todayISO()), lim = limitFor(c, m); if (lim == null) return;
     const before = spentIn(monthTxs(m), c.id, sheet.editing && sheet.editing.id), after = before + (parseAmount($('tAmount').value) || 0);
-    if (after > c.limitCents) { h.className = 'hint over'; h.textContent = `This puts ${c.name} ${money(after - c.limitCents)} over its ${monthName(m)} limit.`; }
-    else { h.className = after >= c.limitCents * WARN_AT ? 'hint warn' : 'hint'; h.textContent = `${money(c.limitCents - after)} left in ${c.name} for ${monthName(m)} after this.`; }
+    if (after > lim) { h.className = 'hint over'; h.textContent = `This puts ${c.name} ${money(after - lim)} over its ${monthName(m)} limit.`; }
+    else { h.className = after >= lim * WARN_AT ? 'hint warn' : 'hint'; h.textContent = `${money(lim - after)} left in ${c.name} for ${monthName(m)} after this.`; }
   }
   ['tAmount', 'tCat', 'tDate'].forEach(id => $(id).addEventListener('input', sheetHint));
 
@@ -839,10 +879,11 @@
     const ed = sheet.editing, freq = ed ? '' : $('tRepeat').value;
     const tx = { ...(ed || {}), id: ed ? ed.id : uid(), type, amountCents, date, month, note: $('tNote').value.trim(), categoryId, subId, accountId, toAccountId, createdAt: ed ? ed.createdAt || Date.now() : Date.now() };
     const c = type === 'expense' ? expCat(categoryId) : null;
-    const before = c ? spentIn(monthTxs(month), c.id, tx.id) : 0, after = before + amountCents;
-    if (c && c.limitCents != null && after > c.limitCents) {
-      const ok = await ask({ title: `This will put ${c.name} over budget`, body: `Your ${c.name} limit for ${monthName(month)} is ${money(c.limitCents)}. This expense takes you past it.`, danger: true, ok: 'Add anyway', cancel: "Don't add it",
-        facts: [['Already spent', money(before)], ['This expense', money(amountCents)], ['Monthly limit', money(c.limitCents)], ['Over by', money(after - c.limitCents), true]] });
+    const before = c ? spentIn(monthTxs(month), c.id, tx.id) : 0, after = before + amountCents, lim = limitFor(c, month);
+    if (lim != null && after > lim) {
+      const extra = rolledIn(c, month);
+      const ok = await ask({ title: `This will put ${c.name} over budget`, body: `Your ${c.name} limit for ${monthName(month)} is ${money(lim)}${extra ? `, including ${money(extra)} rolled over` : ''}. This expense takes you past it.`, danger: true, ok: 'Add anyway', cancel: "Don't add it",
+        facts: [['Already spent', money(before)], ['This expense', money(amountCents)], ['Limit this month', money(lim)], ['Over by', money(after - lim), true]] });
       if (!ok) { toast('Not saved. Change the amount or category, or close the form.'); return; }
     }
     if (freq) {
@@ -854,8 +895,8 @@
     save(); buzz(); burst(type);
     lsSet('ledger-last-type', type); if (accountId) lsSet('ledger-last-acc', accountId);
     const caught = freq ? runRecurring(true) : 0;
-    if (c && c.limitCents != null && after > c.limitCents) toast(`Saved. ${c.name} is now ${money(after - c.limitCents)} over budget.`, 'over');
-    else if (c && c.limitCents != null && after >= c.limitCents * WARN_AT && before < c.limitCents * WARN_AT) toast(`Heads up: ${c.name} is at ${Math.round(after / c.limitCents * 100)}% of its budget.`, 'warn');
+    if (lim != null && after > lim) toast(`Saved. ${c.name} is now ${money(after - lim)} over budget.`, 'over');
+    else if (lim != null && after >= lim * WARN_AT && before < lim * WARN_AT) toast(`Heads up: ${c.name} is at ${Math.round(after / lim * 100)}% of its budget.`, 'warn');
     else {
       const where = month !== ui.month ? ` to ${monthName(month)}` : '';
       toast(ed ? `Transaction updated${where}.` : freq ? `Saved${where}. Repeats ${FREQS[freq].toLowerCase()}${caught ? `; ${caught} past ${caught === 1 ? 'entry' : 'entries'} filled in` : ''}.` : `Saved ${money(amountCents)} ${type}${where}.`);
@@ -867,6 +908,101 @@
   $('sheetForm').addEventListener('submit', e => { e.preventDefault(); submitSheet(false); });
   $('tMore').onclick = () => submitSheet(true);
   armDelete($('tDelete'), () => { const id = sheet.editing.id; data.txs = data.txs.filter(t => t.id !== id); save(); closeSheet(); render(); toast('Transaction deleted.'); });
+
+  /* ================= category picker ================= */
+  // Replaces the plain dropdown: tiles for each category, a second step for subcategories,
+  // and forms to add a category or subcategory on the spot. It drives the hidden #tCat/#tSub selects.
+  const pick = { step: 'cat', catId: null, adding: false };
+  const catList = () => sheet.type === 'income' ? data.incomeCategories : data.categories;
+  const findCat = id => (sheet.type === 'income' ? incCat : expCat)(id);
+  const sheetMonth = () => monthOf($('tDate').value || todayISO());
+  const initial = name => (name.trim()[0] || '?').toUpperCase();
+  function leftText(c) {
+    if (sheet.type !== 'expense') return '';
+    const m = sheetMonth(), lim = limitFor(c, m); if (lim == null) return '';
+    const left = lim - spentIn(monthTxs(m), c.id, sheet.editing && sheet.editing.id);
+    return left >= 0 ? `${money(left)} left` : `${money(-left)} over`;
+  }
+  function pickLabel() {
+    const c = findCat($('tCat').value), sb = c && $('tSub').value ? (c.subs || []).find(x => x.id === $('tSub').value) : null;
+    $('pickAv').textContent = c ? initial(c.name) : '+';
+    $('pickAv').style.setProperty('--c', c ? `var(${c.color})` : 'var(--muted)');
+    $('pickName').textContent = c ? (sb ? `${c.name} · ${sb.name}` : c.name) : 'Choose a category';
+    $('pickSub').textContent = c ? (leftText(c) || ((c.subs || []).length && !sb ? 'Tap to add a subcategory' : '')) : 'Tap to choose';
+    $('pickSub').classList.toggle('over', !!c && leftText(c).endsWith('over'));
+  }
+  function choose(catId, subId) { $('tCat').value = catId; fillSubs(subId || ''); sheetHint(); }
+  function openPicker() { pick.step = 'cat'; pick.adding = false; $('picker').hidden = false; drawPicker(); }
+  function closePicker() { $('picker').hidden = true; pick.adding = false; }
+  function drawPicker() {
+    const body = $('pickBody'), isInc = sheet.type === 'income'; body.replaceChildren();
+    $('pickBack').hidden = pick.step !== 'sub';
+    if (pick.step === 'cat') {
+      $('pickTitle').textContent = isInc ? 'Income category' : 'Expense category';
+      const grid = el('div', { class: 'pick-grid' });
+      catList().forEach((c, i) => {
+        const lt = leftText(c), subsN = (c.subs || []).length;
+        grid.append(el('button', { type: 'button', class: `tile${$('tCat').value === c.id ? ' on' : ''}`, style: `--c:var(${c.color});--i:${Math.min(i, 14)}`, 'aria-label': `${c.name}${lt ? `, ${lt}` : ''}`, onclick: () => {
+          choose(c.id, '');
+          if (subsN) { pick.step = 'sub'; pick.catId = c.id; pick.adding = false; drawPicker(); } else { closePicker(); buzz(); }
+        } }, el('span', { class: 'avatar', text: initial(c.name) }), el('span', { class: 'tile-name', text: c.name }),
+          lt ? el('span', { class: `tile-meta${lt.endsWith('over') ? ' over' : ''}`, text: lt }) : subsN ? el('span', { class: 'tile-meta', text: `${subsN} sub${subsN === 1 ? '' : 's'}` }) : null));
+      });
+      grid.append(el('button', { type: 'button', class: `tile add${pick.adding ? ' on' : ''}`, style: `--i:${Math.min(catList().length, 14)}`, onclick: () => { pick.adding = !pick.adding; drawPicker(); } },
+        el('span', { class: 'avatar', text: '+' }), el('span', { class: 'tile-name', text: 'New category' })));
+      if (pick.adding) body.append(newCatForm());
+      body.append(grid);
+    } else {
+      const c = findCat(pick.catId); if (!c) { pick.step = 'cat'; drawPicker(); return; }
+      $('pickTitle').textContent = c.name;
+      body.append(el('p', { class: 'hint', text: 'Pick a subcategory, or keep it general.' }),
+        el('div', { class: 'pick-chips' },
+          el('button', { type: 'button', class: `pchip${!$('tSub').value ? ' on' : ''}`, text: `Just ${c.name}`, onclick: () => { choose(c.id, ''); closePicker(); buzz(); } }),
+          (c.subs || []).map((sb, i) => el('button', { type: 'button', class: `pchip${$('tSub').value === sb.id ? ' on' : ''}`, style: `--i:${Math.min(i + 1, 14)}`, text: sb.name, onclick: () => { choose(c.id, sb.id); closePicker(); buzz(); } })),
+          el('button', { type: 'button', class: 'pchip add', text: '+ New subcategory', onclick: () => { pick.adding = !pick.adding; drawPicker(); } })));
+      if (pick.adding) body.append(newSubForm(c));
+    }
+  }
+  function newCatForm() {
+    const isInc = sheet.type === 'income';
+    const name = el('input', { id: 'ncName', maxlength: 40, required: true, placeholder: isInc ? 'e.g. Freelance' : 'e.g. Hair & beauty', autocomplete: 'off' });
+    const lim = isInc ? null : el('input', { id: 'ncLimit', class: 'num', inputmode: 'decimal', placeholder: 'No limit' });
+    setTimeout(() => name.focus(), 60);
+    return el('form', { class: 'new-form', onsubmit: e => {
+      e.preventDefault(); const n = name.value.trim(); if (!n) return;
+      if (catList().some(c => c.name.toLowerCase() === n.toLowerCase())) { toast(`You already have a category called ${n}.`, 'warn'); return; }
+      let lc = null;
+      if (lim && lim.value.trim()) { lc = parseAmount(lim.value); if (lc == null) { toast('Enter the limit as a number, like 250.', 'warn'); return; } }
+      const list = catList(), c = { id: uid(), name: n, color: SW[list.length % SW.length], subs: [] };
+      if (!isInc) Object.assign(c, { limitCents: lc, limitSince: lc == null ? null : sheetMonth() });
+      list.push(c); save();
+      setType(sheet.type); choose(c.id, ''); closePicker(); buzz();
+      toast(`${n} saved as a new ${isInc ? 'income' : 'expense'} category.`);
+    } },
+      el('div', { class: 'field' }, el('label', { class: 'label', for: 'ncName', text: 'New category name' }), name),
+      lim ? el('div', { class: 'field' }, el('label', { class: 'label', for: 'ncLimit', text: 'Monthly limit (optional)' }), lim) : null,
+      el('div', { class: 'acts' }, el('button', { type: 'button', class: 'btn small', text: 'Cancel', onclick: () => { pick.adding = false; drawPicker(); } }),
+        el('button', { type: 'submit', class: 'btn primary small', text: 'Save category' })));
+  }
+  function newSubForm(c) {
+    const name = el('input', { id: 'nsName', maxlength: 40, required: true, placeholder: 'e.g. Breakfast', autocomplete: 'off' });
+    setTimeout(() => name.focus(), 60);
+    return el('form', { class: 'new-form', onsubmit: e => {
+      e.preventDefault(); const n = name.value.trim(); if (!n) return;
+      c.subs = c.subs || [];
+      if (c.subs.some(x => x.name.toLowerCase() === n.toLowerCase())) { toast(`${c.name} already has ${n}.`, 'warn'); return; }
+      const sb = { id: uid(), name: n }; c.subs.push(sb); save();
+      choose(c.id, sb.id); closePicker(); buzz(); toast(`${n} added under ${c.name}.`);
+    } },
+      el('div', { class: 'field' }, el('label', { class: 'label', for: 'nsName', text: `New subcategory in ${c.name}` }), name),
+      el('div', { class: 'acts' }, el('button', { type: 'button', class: 'btn small', text: 'Cancel', onclick: () => { pick.adding = false; drawPicker(); } }),
+        el('button', { type: 'submit', class: 'btn primary small', text: 'Save subcategory' })));
+  }
+  $('pickBtn').onclick = openPicker;
+  $('pickClose').onclick = closePicker;
+  $('pickBack').onclick = () => { pick.step = 'cat'; pick.adding = false; drawPicker(); };
+  $('picker').addEventListener('click', e => { if (e.target === $('picker')) closePicker(); });
+  $('tDate').addEventListener('change', pickLabel);
 
   /* ================= generic form sheet ================= */
   let formCfg = null;
@@ -925,7 +1061,7 @@
   }
   document.addEventListener('keydown', e => {
     if (e.key !== 'Escape' || !$('confirm').hidden) return;
-    if (!$('formSheet').hidden) closeForm(); else if (!$('sheet').hidden) closeSheet();
+    if (!$('picker').hidden) closePicker(); else if (!$('formSheet').hidden) closeForm(); else if (!$('sheet').hidden) closeSheet();
   });
 
   /* ================= backup / import ================= */
@@ -1294,7 +1430,10 @@
     openInfo(`What's new in v${APP_VERSION}`, [
       el('p', { class: 'hint', text: 'All your transactions, budgets, goals and settings carried over.' }),
       el('ul', { class: 'steps' },
-        li('The Accounts section (assets, owed, net worth) has been removed from More. Your transactions are unchanged.'),
+        li('Leftover money now carries into the next month. You will see "Brought forward" at the start of each month and on the summary card.'),
+        li('Unspent budget rolls over: what a category did not use is added to its limit next month.'),
+        li('New category picker: colourful tiles showing how much each budget has left, and a "+ New category" tile to add one on the spot.'),
+        li('Both carry-overs can be switched off under More → Month to month.'),
         li('Changing or removing your PIN now asks for your current PIN first.'),
         li('Forgot PIN works: reset it with a recovery code or a security question, without losing any data.'),
         li('A livelier look: summary card with what is left to spend, category badges, animated totals and bars.'),
