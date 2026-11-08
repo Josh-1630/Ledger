@@ -4,7 +4,7 @@
   const $ = id => document.getElementById(id);
   const WARN_AT = 0.8;
   const KEY = 'spending-ledger-app-v1';
-  const APP_VERSION = '8';
+  const APP_VERSION = '9';
   const SNAP_KEY = 'spending-ledger-safety-copy';
   const SW = ['--c1', '--c2', '--c3', '--c4', '--c5', '--c6', '--c7', '--c8'];
   const GROUPS = ['Cash', 'Bank account', 'Mobile money', 'Card', 'Savings', 'Loan', 'Other'];
@@ -1015,7 +1015,7 @@
   /* ================= Google Drive backup ================= */
   // Backs up to the hidden app folder in the person's own Google Drive (where WhatsApp keeps its backups).
   // Only this app can see that folder. Needs a Google OAuth client ID registered for this site's address.
-  const GOOGLE_CLIENT_ID = '';
+  const GOOGLE_CLIENT_ID = '85347082512-cfheoibqoi2vuo9antti8cq3ilq15kv9.apps.googleusercontent.com';
   const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
   const DRIVE = 'https://www.googleapis.com/drive/v3/files', UPLOAD = 'https://www.googleapis.com/upload/drive/v3/files', MAIN_FILE = 'ledger-backup.json';
   const cloud = { token: null, expires: 0, busy: false, timer: null };
@@ -1701,6 +1701,7 @@
     openInfo(`What's new in v${APP_VERSION}`, [
       el('p', { class: 'hint', text: 'All your transactions, budgets, goals and settings carried over.' }),
       el('ul', { class: 'steps' },
+        li('Google backup is on: sign in with Google under More and Ledger backs up to a private folder in your Google Drive. A new phone can restore everything, receipts included.'),
         li('Receipt photos: take or choose a photo when adding an expense. A paperclip marks entries that have one; tap the photo to see it full size.'),
         li('Backup files now include your receipt photos.'),
         li('Leftover money now carries into the next month. You will see "Brought forward" at the start of each month and on the summary card.'),
