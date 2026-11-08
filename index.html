@@ -81,6 +81,18 @@
       <div class="field" id="fTo" hidden><label class="label" for="tTo">To account</label><select id="tTo"></select></div>
     </div>
     <div class="field"><label class="label" for="tNote">Note</label><input id="tNote" maxlength="120" placeholder="e.g. Lunch with team"></div>
+    <div class="field" id="fReceipt"><span class="label">Receipt</span>
+      <div class="rc-actions" id="rcActions">
+        <button type="button" class="btn small rc-btn" id="rcTake"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>Take photo</button>
+        <button type="button" class="btn small rc-btn" id="rcChoose"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M4 16l5-5 4 4 3-3 4 4"/></svg>Choose photo</button>
+      </div>
+      <div class="rc-preview" id="rcPreview" hidden>
+        <button type="button" class="rc-thumb" id="rcThumb" aria-label="View receipt full size"><img id="rcImg" alt="Receipt photo"></button>
+        <div class="rc-side"><span class="hint" id="rcInfo"></span><div class="acts" style="justify-content:flex-start"><button type="button" class="linkbtn" id="rcReplace">Replace</button><button type="button" class="linkbtn rc-remove" id="rcRemove">Remove</button></div></div>
+      </div>
+      <input type="file" id="rcCam" accept="image/*" capture="environment" hidden>
+      <input type="file" id="rcPick" accept="image/*" hidden>
+    </div>
     <div class="field" id="fRepeat"><label class="label" for="tRepeat">Repeat</label>
       <select id="tRepeat"><option value="">Never</option><option value="weekly">Every week</option><option value="biweekly">Every 2 weeks</option><option value="monthly">Every month</option><option value="yearly">Every year</option></select>
     </div>
@@ -139,6 +151,11 @@
     <strong id="updMsg">Updating Ledger…</strong>
     <span class="hint">Your transactions stay on this phone.</span>
   </div>
+</div>
+
+<div class="viewer" id="viewer" hidden role="dialog" aria-modal="true" aria-label="Receipt photo">
+  <img id="viewerImg" alt="Receipt photo">
+  <button type="button" class="viewer-close" id="viewerClose">Close</button>
 </div>
 
 <div class="toasts" id="toasts" aria-live="polite"></div>

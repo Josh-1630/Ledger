@@ -4,7 +4,7 @@
   const $ = id => document.getElementById(id);
   const WARN_AT = 0.8;
   const KEY = 'spending-ledger-app-v1';
-  const APP_VERSION = '7';
+  const APP_VERSION = '8';
   const SNAP_KEY = 'spending-ledger-safety-copy';
   const SW = ['--c1', '--c2', '--c3', '--c4', '--c5', '--c6', '--c7', '--c8'];
   const GROUPS = ['Cash', 'Bank account', 'Mobile money', 'Card', 'Savings', 'Loan', 'Other'];
@@ -74,10 +74,13 @@
   }
   let persistAsked = false;
   const memo = new Map();
-  function save() {
+  let afterSave = null;
+  function save(quiet) {
     memo.clear();
+    if (!quiet && data.cloud) data.cloud.dirty = true;
     if (!lsSet(KEY, JSON.stringify(data))) toast("Couldn't save on this device. Storage may be full or blocked.", 'over');
     if (!persistAsked && navigator.storage && navigator.storage.persist) { persistAsked = true; navigator.storage.persist().catch(() => {}); }
+    if (afterSave) afterSave(quiet);
   }
 
   /* ================= derived ================= */
@@ -284,7 +287,8 @@
         el('div', { class: 'field' }, el('label', { class: 'label', for: 'welcomeCur', text: 'Currency' }), cur),
         el('div', { class: 'acts', style: 'justify-content:flex-start' },
           el('button', { class: 'btn primary small', text: 'Start', onclick: () => { data.currency = cur.value; data.onboarded = true; save(); render(); } }),
-          el('button', { class: 'btn small', text: 'Import CSV', onclick: () => { data.currency = cur.value; data.onboarded = true; save(); pickFile(); } })))));
+          el('button', { class: 'btn small', text: 'Import CSV', onclick: () => { data.currency = cur.value; data.onboarded = true; save(); pickFile(); } }),
+          cloudOn() ? el('button', { class: 'btn small', text: 'Restore from Google', onclick: () => { data.currency = cur.value; connectGoogle('restore'); } }) : null))));
       return;
     }
     if (!isStandalone() && !lsGet('ledger-install-dismissed')) {
@@ -293,6 +297,24 @@
         el('strong', { text: 'Put Ledger on your home screen' }),
         el('span', { class: 'hint', text: 'It gets its own icon, opens full screen like a normal app and works offline.' }),
         el('div', { class: 'acts', style: 'justify-content:flex-start' }, el('button', { class: 'btn primary small', text: 'Install app', onclick: promptInstall }), dismiss))));
+      return;
+    }
+    let laterBk = false; try { laterBk = !!sessionStorage.getItem('ledger-bk-dismiss'); } catch {}
+    const later = el('button', { class: 'icon-btn', text: 'Later', onclick: () => { try { sessionStorage.setItem('ledger-bk-dismiss', '1'); } catch {} render(); } });
+    if (cloudOn() && data.cloud) {
+      if (data.cloud.dirty && !tokenValid() && !laterBk && (!data.cloud.lastAt || Date.now() - data.cloud.lastAt > 864e5))
+        box.append(el('div', { class: 'alert info' }, el('span', { class: 'sign', text: '↑' }), el('div', { class: 'grow' },
+          el('strong', { text: 'Back up to Google' }),
+          el('span', { class: 'hint', text: `Last backup ${agoText(data.cloud.lastAt)}. One tap saves your changes to ${data.cloud.email || 'your Google account'}.` }),
+          el('div', { class: 'acts', style: 'justify-content:flex-start' }, el('button', { class: 'btn primary small', text: 'Back up now', onclick: backupNow }), later))));
+      return;
+    }
+    if (cloudOn() && data.txs.length >= 5 && !lsGet('ledger-cloud-dismissed')) {
+      box.append(el('div', { class: 'alert info' }, el('span', { class: 'sign', text: '↑' }), el('div', { class: 'grow' },
+        el('strong', { text: 'Keep a backup in your Google account' }),
+        el('span', { class: 'hint', text: 'Sign in with Google and Ledger backs up to your Google Drive, like WhatsApp. A new phone can restore everything.' }),
+        el('div', { class: 'acts', style: 'justify-content:flex-start' }, el('button', { class: 'btn primary small', text: 'Sign in with Google', onclick: () => connectGoogle('connect') }),
+          el('button', { class: 'icon-btn', text: 'Not now', onclick: () => { lsSet('ledger-cloud-dismissed', '1'); render(); } })))));
       return;
     }
     const since = data.lastBackup ? (Date.now() - data.lastBackup) / 864e5 : Infinity;
@@ -327,7 +349,7 @@
     const line2 = [x.type === 'transfer' ? null : sub ? `${catName} · ${sub.name}` : catName, accText].filter(Boolean).join(' · ');
     return el('button', { class: 'tx', type: 'button', onclick: () => openTxSheet(x) },
       el('span', { class: 'avatar', style: `--c:${color}`, 'aria-hidden': 'true', text: x.type === 'transfer' ? '⇄' : (catName.trim()[0] || '?').toUpperCase() }),
-      el('span', { class: 'what' }, el('div', { class: 't1' }, title, x.recurringId ? el('span', { class: 'rep', text: '↻', title: 'Repeats' }) : null), line2 ? el('div', { class: 'acc', text: line2 }) : null),
+      el('span', { class: 'what' }, el('div', { class: 't1' }, title, x.recurringId ? el('span', { class: 'rep', text: '↻', title: 'Repeats' }) : null, x.receiptId ? svgEl('<svg class="rc-ico" viewBox="0 0 24 24" role="img" aria-label="Receipt photo attached"><path d="M21 11.5l-8.6 8.6a5 5 0 0 1-7.1-7.1l8.6-8.6a3.3 3.3 0 0 1 4.7 4.7l-8.6 8.6a1.7 1.7 0 0 1-2.4-2.4l8-8"/></svg>') : null), line2 ? el('div', { class: 'acc', text: line2 }) : null),
       el('span', { class: `amt num ${cls}`, text: money(x.amountCents) }));
   }
   function groupByDay(list) {
@@ -697,6 +719,7 @@
       data.pin ? el('div', { class: 'row-list' },
         pinRow('Recovery code', data.pin.rec ? `Set up on ${new Date(data.pin.rec.created).toLocaleDateString()}` : 'Not set up. You need it to reset a forgotten PIN.', data.pin.rec ? 'New code' : 'Create', newRecoveryCodeFlow),
         pinRow('Security question', data.pin.q ? data.pin.q.question : 'Optional second way to reset your PIN.', data.pin.q ? 'Change' : 'Add', securityQuestionFlow)) : null));
+    const gp = googlePanel(); if (gp) box.append(gp);
     // data
     const cur = currencySelect('currency');
     cur.onchange = () => { data.currency = cur.value; save(); render(); };
@@ -710,10 +733,10 @@
       el('p', { class: 'hint', text: 'Restore accepts a Ledger backup file. Import accepts the CSV exported from the claude.ai version or this app.' }),
       el('div', {}, el('button', { class: 'btn danger small', text: 'Erase everything on this device', onclick: async () => {
         if (data.pin && !(await requirePin())) return;
-        if (await ask({ title: 'Erase all data?', body: 'This deletes every transaction, budget, goal and account on this phone. Back up first if you might need it.', ok: 'Erase everything', danger: true })) { data = fresh(); data.onboarded = false; save(); ui.tab = 'trans'; render(); toast('All data erased.'); }
+        if (await ask({ title: 'Erase all data?', body: 'This deletes every transaction, budget, goal and account on this phone. Back up first if you might need it.', ok: 'Erase everything', danger: true })) { const cl = data.cloud; data = fresh(); data.onboarded = false; data.cloud = cl; save(); receipts.clear().catch(() => {}); ui.tab = 'trans'; render(); toast('All data erased from this phone.'); }
       } }))));
     box.append(behindTheScenes());
-    box.append(el('p', { class: 'hint', style: 'text-align:center', text: `Spending Ledger v${APP_VERSION} · works offline · your data never leaves this device` }));
+    box.append(el('p', { class: 'hint', style: 'text-align:center', text: `Spending Ledger v${APP_VERSION} · works offline · ${data.cloud ? `backed up to ${data.cloud.email || 'Google'}` : 'your data never leaves this device'}` }));
     return box;
   }
 
@@ -739,8 +762,15 @@
     add('Running as', isStandalone() ? 'Installed app' : 'Web page in the browser');
     add('Offline copy of the app', 'Checking…', 'bsCache');
     add('Internet', navigator.onLine ? 'Online' : 'Offline (still works)');
-    add('Server it talks to', 'None. GitHub Pages only delivers the app files.');
+    add('Receipt photos', 'Checking…', 'bsRc');
+    add('Google backup', data.cloud ? `${data.cloud.email || 'Connected'} · last backup ${agoText(data.cloud.lastAt)}` : cloudOn() ? 'Not connected' : 'Not set up');
+    add('Server it talks to', data.cloud ? 'Only Google Drive, to back up into your own account. GitHub Pages delivers the app files.' : 'None. GitHub Pages only delivers the app files.');
     setTimeout(async () => {
+      try {
+        const ks = await receipts.keys(); let size = 0;
+        for (const k of ks) { const b = await receipts.get(k); size += b ? b.size : 0; }
+        $('bsRc').textContent = ks.length ? `${ks.length} photo${ks.length === 1 ? '' : 's'}, ${fmtBytes(size)}` : 'None';
+      } catch { $('bsRc') && ($('bsRc').textContent = 'Not available'); }
       try { const e = await navigator.storage.estimate(); $('bsQuota').textContent = `${fmtBytes(e.usage || 0)} of ${fmtBytes(e.quota || 0)}`; } catch { $('bsQuota') && ($('bsQuota').textContent = 'Not reported by this browser'); }
       try { const p = await navigator.storage.persisted(); $('bsPersist').textContent = p ? 'Yes' : isStandalone() ? 'Not granted, but installed apps are kept' : 'Not yet. Installing the app helps.'; } catch { $('bsPersist') && ($('bsPersist').textContent = 'Not reported by this browser'); }
       try {
@@ -822,7 +852,7 @@
   function setType(t) {
     sheet.type = t;
     $('typeSeg').querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.t === t)));
-    $('fCat').hidden = t === 'transfer'; $('fPick').hidden = t === 'transfer'; $('fTo').hidden = t !== 'transfer';
+    $('fCat').hidden = t === 'transfer'; $('fPick').hidden = t === 'transfer'; $('fReceipt').hidden = t !== 'expense'; $('fTo').hidden = t !== 'transfer';
     $('tAccLabel').textContent = t === 'transfer' ? 'From account' : 'Account';
     const cats = (t === 'income' ? data.incomeCategories : data.categories).map(c => [c.id, c.name]);
     fillSelect($('tCat'), cats.length ? cats : [['', 'No categories yet']]);
@@ -848,10 +878,11 @@
     $('tRepeat').value = '';
     if (tx) { if (tx.categoryId) $('tCat').value = tx.categoryId; fillSubs(tx.subId || ''); $('tAcc').value = tx.accountId || ''; if (tx.toAccountId) $('tTo').value = tx.toAccountId; }
     else { const la = lsGet('ledger-last-acc'); if (la && accOf(la)) $('tAcc').value = la; }
+    rcLoadFor(tx || null);
     $('sheet').hidden = false; sheetHint();
     setTimeout(() => $('tAmount').focus(), 60);
   }
-  const closeSheet = () => { $('sheet').hidden = true; sheet.editing = null; closePicker(); };
+  const closeSheet = () => { $('sheet').hidden = true; sheet.editing = null; closePicker(); rcReset(); };
   $('sheetClose').onclick = closeSheet;
   $('sheet').addEventListener('click', e => { if (e.target === $('sheet')) closeSheet(); });
   $('fab').onclick = () => openTxSheet(null, ui.tab === 'trans' && ui.sub.trans === 'calendar' && ui.calDay ? ui.calDay : null);
@@ -886,6 +917,10 @@
         facts: [['Already spent', money(before)], ['This expense', money(amountCents)], ['Limit this month', money(lim)], ['Over by', money(after - lim), true]] });
       if (!ok) { toast('Not saved. Change the amount or category, or close the form.'); return; }
     }
+    if (type === 'expense' && rcState.blob) {
+      const rid = (ed && ed.receiptId) || uid();
+      try { await receipts.put(rid, rcState.blob); tx.receiptId = rid; } catch { toast("The photo couldn't be stored on this phone. The expense was saved without it.", 'warn'); }
+    } else if (tx.receiptId && (rcState.removed || type !== 'expense')) { receipts.del(tx.receiptId).catch(() => {}); tx.receiptId = null; }
     if (freq) {
       const r = { id: uid(), type, amountCents, categoryId, subId, accountId, toAccountId, note: tx.note, freq, anchorDay: +date.slice(8), next: nextDate(date, freq, +date.slice(8)), paused: false };
       data.recurring.push(r); tx.recurringId = r.id;
@@ -901,13 +936,247 @@
       const where = month !== ui.month ? ` to ${monthName(month)}` : '';
       toast(ed ? `Transaction updated${where}.` : freq ? `Saved${where}. Repeats ${FREQS[freq].toLowerCase()}${caught ? `; ${caught} past ${caught === 1 ? 'entry' : 'entries'} filled in` : ''}.` : `Saved ${money(amountCents)} ${type}${where}.`);
     }
-    if (more) { $('tAmount').value = ''; $('tNote').value = ''; $('tRepeat').value = ''; $('tAmount').focus(); sheetHint(); }
+    if (more) { $('tAmount').value = ''; $('tNote').value = ''; $('tRepeat').value = ''; rcReset(); $('tAmount').focus(); sheetHint(); }
     else closeSheet();
     render();
   }
   $('sheetForm').addEventListener('submit', e => { e.preventDefault(); submitSheet(false); });
   $('tMore').onclick = () => submitSheet(true);
-  armDelete($('tDelete'), () => { const id = sheet.editing.id; data.txs = data.txs.filter(t => t.id !== id); save(); closeSheet(); render(); toast('Transaction deleted.'); });
+  armDelete($('tDelete'), () => { const id = sheet.editing.id; if (sheet.editing.receiptId) receipts.del(sheet.editing.receiptId).catch(() => {}); data.txs = data.txs.filter(t => t.id !== id); save(); closeSheet(); render(); toast('Transaction deleted.'); });
+
+  /* ================= receipt photos ================= */
+  // Photos live in IndexedDB (far more room than localStorage), keyed by the receiptId on the transaction.
+  const receipts = (() => {
+    let dbp = null;
+    const open = () => dbp || (dbp = new Promise((res, rej) => {
+      const r = indexedDB.open('ledger-receipts', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('r');
+      r.onsuccess = () => res(r.result); r.onerror = () => { dbp = null; rej(r.error); };
+    }));
+    const run = async (mode, fn) => {
+      const db = await open();
+      return new Promise((res, rej) => { const t = db.transaction('r', mode), req = fn(t.objectStore('r')); t.oncomplete = () => res(req ? req.result : undefined); t.onerror = t.onabort = () => rej(t.error); });
+    };
+    return { get: k => run('readonly', s => s.get(k)), put: (k, b) => run('readwrite', s => s.put(b, k)), del: k => run('readwrite', s => s.delete(k)), keys: () => run('readonly', s => s.getAllKeys()), clear: () => run('readwrite', s => s.clear()) };
+  })();
+  // Shrink a camera photo to at most 1400px on its long side, as a JPEG of roughly 100-250 KB.
+  function compressPhoto(file) {
+    return new Promise((res, rej) => {
+      const url = URL.createObjectURL(file), img = new Image();
+      img.onload = () => {
+        const k = Math.min(1, 1400 / Math.max(img.naturalWidth, img.naturalHeight));
+        const c = document.createElement('canvas'); c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); URL.revokeObjectURL(url);
+        c.toBlob(b => b ? res(b) : rej(new Error('the photo could not be processed')), 'image/jpeg', 0.72);
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); rej(new Error('that file is not a photo this phone can open')); };
+      img.src = url;
+    });
+  }
+  const blobToDataURL = b => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(r.error); r.readAsDataURL(b); });
+  const dataURLToBlob = async u => (await fetch(u)).blob();
+  async function receiptsAsData() {
+    const out = {};
+    for (const t of data.txs) if (t.receiptId && !out[t.receiptId]) { const b = await receipts.get(t.receiptId).catch(() => null); if (b) out[t.receiptId] = await blobToDataURL(b); }
+    return out;
+  }
+  const rcState = { blob: null, url: null, removed: false };
+  function rcReset() { if (rcState.url) URL.revokeObjectURL(rcState.url); Object.assign(rcState, { blob: null, url: null, removed: false }); rcShow(null); }
+  function rcShow(url, info) {
+    $('rcActions').hidden = !!url; $('rcPreview').hidden = !url;
+    if (url) { $('rcImg').src = url; $('rcInfo').textContent = info || 'Receipt attached'; } else $('rcImg').removeAttribute('src');
+  }
+  async function rcLoadFor(tx) {
+    rcReset();
+    if (!tx || !tx.receiptId) return;
+    try {
+      const b = await receipts.get(tx.receiptId);
+      if (b && sheet.editing === tx) { rcState.url = URL.createObjectURL(b); rcShow(rcState.url, `Receipt photo · ${fmtBytes(b.size)}`); }
+    } catch {}
+  }
+  async function rcUseFile(file) {
+    if (!file) return;
+    try {
+      const b = await compressPhoto(file);
+      if (rcState.url) URL.revokeObjectURL(rcState.url);
+      Object.assign(rcState, { blob: b, url: URL.createObjectURL(b), removed: false });
+      rcShow(rcState.url, `New photo · ${fmtBytes(b.size)}`); buzz();
+    } catch (e) { toast(`Couldn't add the photo: ${e.message}.`, 'warn'); }
+  }
+  $('rcTake').onclick = () => { $('rcCam').value = ''; $('rcCam').click(); };
+  $('rcChoose').onclick = $('rcReplace').onclick = () => { $('rcPick').value = ''; $('rcPick').click(); };
+  $('rcCam').onchange = e => rcUseFile(e.target.files[0]);
+  $('rcPick').onchange = e => rcUseFile(e.target.files[0]);
+  $('rcRemove').onclick = () => { if (rcState.url) URL.revokeObjectURL(rcState.url); Object.assign(rcState, { blob: null, url: null, removed: true }); rcShow(null); };
+  $('rcThumb').onclick = () => { if (rcState.url) { $('viewerImg').src = rcState.url; $('viewer').hidden = false; } };
+  $('viewerClose').onclick = () => { $('viewer').hidden = true; };
+  $('viewer').addEventListener('click', e => { if (e.target === $('viewer')) $('viewer').hidden = true; });
+
+  /* ================= Google Drive backup ================= */
+  // Backs up to the hidden app folder in the person's own Google Drive (where WhatsApp keeps its backups).
+  // Only this app can see that folder. Needs a Google OAuth client ID registered for this site's address.
+  const GOOGLE_CLIENT_ID = '';
+  const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
+  const DRIVE = 'https://www.googleapis.com/drive/v3/files', UPLOAD = 'https://www.googleapis.com/upload/drive/v3/files', MAIN_FILE = 'ledger-backup.json';
+  const cloud = { token: null, expires: 0, busy: false, timer: null };
+  const cloudOn = () => !!GOOGLE_CLIENT_ID;
+  const gisReady = () => !!(window.google && google.accounts && google.accounts.oauth2);
+  const tokenValid = () => !!cloud.token && Date.now() < cloud.expires - 60000;
+  let gisLoading = null;
+  function loadGis() {
+    if (gisReady()) return Promise.resolve();
+    return gisLoading || (gisLoading = new Promise((res, rej) => {
+      const s = el('script', { src: 'https://accounts.google.com/gsi/client', async: true });
+      s.onload = () => res(); s.onerror = () => { gisLoading = null; s.remove(); rej(new Error('offline')); };
+      document.head.append(s);
+    }));
+  }
+  // Call straight from a tap: Google shows its own small sign-in window.
+  function signIn() {
+    if (tokenValid()) return Promise.resolve(cloud.token);
+    if (!gisReady()) { loadGis().catch(() => {}); return Promise.reject(new Error(navigator.onLine ? 'loading' : 'offline')); }
+    return new Promise((res, rej) => {
+      google.accounts.oauth2.initTokenClient({
+        client_id: GOOGLE_CLIENT_ID, scope: `${DRIVE_SCOPE} openid email`, login_hint: (data.cloud && data.cloud.email) || undefined,
+        callback: r => {
+          if (r.error) return rej(new Error(r.error === 'access_denied' ? 'cancelled' : r.error_description || r.error));
+          if (!google.accounts.oauth2.hasGrantedAllScopes(r, DRIVE_SCOPE)) return rej(new Error('drive-denied'));
+          cloud.token = r.access_token; cloud.expires = Date.now() + (+r.expires_in || 3600) * 1000; res(cloud.token);
+        },
+        error_callback: e => rej(new Error(e && e.type === 'popup_closed' ? 'cancelled' : e && e.type === 'popup_failed_to_open' ? 'popup' : (e && e.message) || 'failed')),
+      }).requestAccessToken({ prompt: data.cloud ? '' : 'consent' });
+    });
+  }
+  async function gfetch(url, opts = {}) {
+    if (!tokenValid()) throw new Error('expired');
+    const r = await fetch(url, { ...opts, headers: { ...(opts.headers || {}), Authorization: `Bearer ${cloud.token}` } });
+    if (r.status === 401) { cloud.token = null; throw new Error('expired'); }
+    if (!r.ok) throw new Error(`Google Drive answered ${r.status}`);
+    return r;
+  }
+  async function listFiles() {
+    let out = [], page = '';
+    do {
+      const r = await (await gfetch(`${DRIVE}?spaces=appDataFolder&pageSize=1000&fields=nextPageToken,files(id,name,modifiedTime,size)${page ? `&pageToken=${encodeURIComponent(page)}` : ''}`)).json();
+      out = out.concat(r.files || []); page = r.nextPageToken;
+    } while (page);
+    return out;
+  }
+  async function uploadFile(name, blob, id) {
+    const body = new FormData();
+    body.append('metadata', new Blob([JSON.stringify(id ? {} : { name, parents: ['appDataFolder'] })], { type: 'application/json' }));
+    body.append('file', blob);
+    return (await gfetch(`${UPLOAD}${id ? `/${id}` : ''}?uploadType=multipart&fields=id,modifiedTime`, { method: id ? 'PATCH' : 'POST', body })).json();
+  }
+  async function cloudBackup() {
+    if (cloud.busy || !data.cloud || !tokenValid()) return false;
+    cloud.busy = true;
+    try {
+      const files = await listFiles(), byName = new Map(files.map(f => [f.name, f]));
+      const used = new Set(data.txs.map(t => t.receiptId).filter(Boolean));
+      for (const id of used) {
+        if (byName.has(`receipt-${id}.jpg`)) continue;
+        const b = await receipts.get(id).catch(() => null);
+        if (b) await uploadFile(`receipt-${id}.jpg`, b);
+      }
+      for (const f of files) if (f.name.startsWith('receipt-') && !used.has(f.name.slice(8, -4))) await gfetch(`${DRIVE}/${f.id}`, { method: 'DELETE' }).catch(() => {});
+      const { pin, cloud: _c, ...rest } = data;
+      const main = byName.get(MAIN_FILE);
+      await uploadFile(MAIN_FILE, new Blob([JSON.stringify({ app: 'spending-ledger', savedAt: Date.now(), ...rest })], { type: 'application/json' }), main && main.id);
+      data.cloud.lastAt = Date.now(); data.cloud.dirty = false; data.lastBackup = Date.now(); save(true);
+      return true;
+    } finally { cloud.busy = false; }
+  }
+  async function cloudRestore(files, askFirst) {
+    const main = files.find(f => f.name === MAIN_FILE);
+    if (!main) { toast('No Ledger backup was found in this Google account yet.', 'warn'); return false; }
+    showUpdating('Reading your backup…');
+    const obj = await (await gfetch(`${DRIVE}/${main.id}?alt=media`)).json();
+    $('updating').hidden = true;
+    if (!obj || !Array.isArray(obj.txs)) throw new Error('the backup file is damaged');
+    if (askFirst && !(await ask({ title: 'Restore from Google?', body: `Found a backup from ${new Date(main.modifiedTime).toLocaleString()} with ${obj.txs.length} transactions. It replaces what is on this phone now (${data.txs.length} transactions).`, ok: 'Restore', danger: data.txs.length > 0 }))) return false;
+    showUpdating('Restoring from Google…');
+    try {
+      const byName = new Map(files.map(f => [f.name, f]));
+      await receipts.clear().catch(() => {});
+      let got = 0;
+      for (const id of new Set(obj.txs.map(t => t.receiptId).filter(Boolean))) {
+        const f = byName.get(`receipt-${id}.jpg`); if (!f) continue;
+        await receipts.put(id, await (await gfetch(`${DRIVE}/${f.id}?alt=media`)).blob()); got++;
+      }
+      const pin = data.pin, cl = data.cloud; delete obj.app; delete obj.savedAt;
+      data = normalize(obj); data.pin = pin; data.onboarded = true; data.appVersion = APP_VERSION;
+      data.cloud = { ...cl, lastAt: Date.parse(main.modifiedTime) || Date.now(), dirty: false };
+      save(true); runRecurring(true); ui.tab = 'trans';
+      toast(`Restored ${data.txs.length} transactions${got ? ` and ${got} receipt photo${got === 1 ? '' : 's'}` : ''} from Google.`); buzz();
+      return true;
+    } finally { $('updating').hidden = true; }
+  }
+  function cloudError(e) {
+    $('updating').hidden = true;
+    const m = e && e.message;
+    if (m === 'cancelled') toast('Google sign-in was cancelled.');
+    else if (m === 'loading') toast('Connecting to Google. Tap again in a moment.', 'warn');
+    else if (m === 'popup') toast('The Google window was blocked. Allow pop-ups for this site and tap again.', 'warn');
+    else if (m === 'drive-denied') toast('Ledger needs permission to use its own folder in your Google Drive. Tap again and allow it.', 'warn');
+    else if (m === 'offline' || !navigator.onLine) toast('No internet connection. Your data is safe on this phone; back up when you are online.', 'warn');
+    else if (m === 'expired') toast('Your Google session ended. Tap again to continue.', 'warn');
+    else toast(`Google backup didn't work (${m || 'unknown error'}). Try again.`, 'over');
+  }
+  // mode 'connect' from More, 'restore' from the welcome card or More.
+  function connectGoogle(mode) {
+    signIn().then(async () => {
+      showUpdating('Connecting to Google…');
+      let email = '';
+      try { email = (await (await gfetch('https://www.googleapis.com/oauth2/v3/userinfo')).json()).email || ''; } catch {}
+      data.cloud = { email, lastAt: data.cloud ? data.cloud.lastAt : null, dirty: true }; save(true);
+      const files = await listFiles(); $('updating').hidden = true;
+      const main = files.find(f => f.name === MAIN_FILE);
+      if (main && (mode === 'restore' || !data.txs.length)) { await cloudRestore(files, data.txs.length > 0); return; }
+      if (main && await ask({ title: 'This account already has a backup', body: `There is a Ledger backup from ${new Date(main.modifiedTime).toLocaleString()} in ${email || 'this Google account'}. Restore it here, or replace it with what is on this phone?`, ok: 'Restore it here', cancel: "Keep this phone's data" })) { await cloudRestore(files, false); return; }
+      if (!main && mode === 'restore') toast('No backup in this Google account yet, so this phone\'s data will be backed up to it.', 'warn');
+      data.onboarded = true;
+      showUpdating('Backing up to Google…'); await cloudBackup();
+      toast(`Connected to ${email || 'your Google account'}. Backup saved.`); buzz();
+    }).catch(cloudError).finally(() => { $('updating').hidden = true; render(); });
+  }
+  function backupNow() {
+    signIn().then(async () => { showUpdating('Backing up to Google…'); await cloudBackup(); toast('Backed up to Google.'); buzz(); })
+      .catch(cloudError).finally(() => { $('updating').hidden = true; render(); });
+  }
+  function restoreFromGoogle() {
+    signIn().then(async () => { showUpdating('Looking for your backup…'); const files = await listFiles(); $('updating').hidden = true; await cloudRestore(files, true); })
+      .catch(cloudError).finally(() => { $('updating').hidden = true; render(); });
+  }
+  async function disconnectGoogle() {
+    if (!(await ask({ title: 'Disconnect Google backup?', body: 'Automatic backups stop. Your last backup stays in your Google account, and nothing on this phone is deleted.', ok: 'Disconnect' }))) return;
+    if (cloud.token && gisReady()) try { google.accounts.oauth2.revoke(cloud.token, () => {}); } catch {}
+    cloud.token = null; data.cloud = null; save(true); render(); toast('Google backup disconnected.');
+  }
+  const agoText = t => { if (!t) return 'never'; const m = Math.round((Date.now() - t) / 60000); return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} days ago`; };
+  // While signed in, a change is backed up 15 seconds later; leaving the app backs up straight away.
+  afterSave = quiet => {
+    if (quiet || !data.cloud || !tokenValid()) return;
+    clearTimeout(cloud.timer);
+    cloud.timer = setTimeout(() => cloudBackup().catch(() => {}), 15000);
+  };
+  function googlePanel() {
+    if (!cloudOn()) return null;
+    loadGis().catch(() => {});
+    const c = data.cloud;
+    if (!c) return el('div', { class: 'panel' }, el('div', { class: 'panel-head' }, el('h2', { text: 'Google backup' }), el('span', { class: 'pill muted', text: 'Off' })),
+      el('p', { class: 'hint', text: 'Sign in with Google and Ledger backs up to a private folder in your Google Drive, like WhatsApp does. On a new phone, sign in and restore everything, receipts included.' }),
+      el('div', {}, el('button', { class: 'btn primary', type: 'button', text: 'Sign in with Google', onclick: () => connectGoogle('connect') })));
+    return el('div', { class: 'panel' }, el('div', { class: 'panel-head' }, el('h2', { text: 'Google backup' }), el('span', { class: 'pill ok', text: 'On' })),
+      el('div', { class: 'row-list' },
+        el('div', { class: 'row-item' }, el('span', { class: 'grow' }, 'Account', el('div', { class: 'sub', text: c.email || 'Google account' }))),
+        el('div', { class: 'row-item' }, el('span', { class: 'grow' }, 'Last backup', el('div', { class: 'sub', text: `${agoText(c.lastAt)}${c.dirty ? ' · new changes waiting' : ' · up to date'}` })))),
+      el('p', { class: 'hint', text: tokenValid() ? 'Connected now: changes back up by themselves a few seconds after you make them.' : 'Tap Back up now to connect for this session; after that, changes back up by themselves.' }),
+      el('div', { class: 'acts', style: 'justify-content:flex-start' },
+        el('button', { class: 'btn primary small', type: 'button', text: 'Back up now', onclick: backupNow }),
+        el('button', { class: 'btn small', type: 'button', text: 'Restore from Google', onclick: restoreFromGoogle }),
+        el('button', { class: 'btn danger small', type: 'button', text: 'Disconnect', onclick: disconnectGoogle })));
+  }
 
   /* ================= category picker ================= */
   // Replaces the plain dropdown: tiles for each category, a second step for subcategories,
@@ -1078,8 +1347,9 @@
     return true;
   }
   async function exportJSON() {
-    const { pin, ...rest } = data;
-    if (await saveFile(`ledger-backup-${todayISO()}.json`, JSON.stringify({ app: 'spending-ledger', ...rest }, null, 1), 'application/json')) {
+    const { pin, cloud: _c, ...rest } = data;
+    const photos = await receiptsAsData();
+    if (await saveFile(`ledger-backup-${todayISO()}.json`, JSON.stringify({ app: 'spending-ledger', ...rest, receipts: photos }), 'application/json')) {
       data.lastBackup = Date.now(); save(); render(); toast('Backup saved. Keep the file somewhere safe, like Google Drive or iCloud.');
     }
   }
@@ -1105,8 +1375,9 @@
     if (!obj || !Array.isArray(obj.txs)) throw new Error('not a Ledger backup');
     if (!(await ask({ title: 'Restore this backup?', body: `It has ${obj.txs.length} transactions, ${(obj.goals || []).length} goals and ${(obj.categories || []).length} categories. Everything currently on this phone will be replaced.`, ok: 'Replace and restore', danger: true }))) return;
     const viaForgot = forgotRestore; forgotRestore = false;
-    const pin = viaForgot ? null : data.pin; delete obj.app;
-    data = normalize(obj); data.pin = pin; data.onboarded = true; data.appVersion = APP_VERSION; save(); runRecurring(true); ui.tab = 'trans';
+    const pin = viaForgot ? null : data.pin, cl = data.cloud, photos = obj.receipts || {}; delete obj.app; delete obj.receipts;
+    try { await receipts.clear(); for (const [k, u] of Object.entries(photos)) await receipts.put(k, await dataURLToBlob(u)); } catch { toast('Some receipt photos could not be restored.', 'warn'); }
+    data = normalize(obj); data.pin = pin; data.cloud = cl; data.onboarded = true; data.appVersion = APP_VERSION; save(); runRecurring(true); ui.tab = 'trans';
     if (viaForgot) { hideLock(); render(); toast('Backup restored. The old PIN was removed; set a new one under More.'); } else { render(); toast('Backup restored.'); }
   }
   function parseCSV(text) {
@@ -1293,7 +1564,7 @@
     if (p.q) opts.push(el('button', { class: p.rec ? 'btn' : 'btn primary', type: 'button', text: 'Answer my security question', onclick: () => recoverWith('q') }));
     opts.push(el('button', { class: 'btn', type: 'button', text: 'Restore from a backup file', onclick: () => { forgotRestore = true; closeForm(); pickFile(); } }));
     opts.push(armDelete(el('button', { class: 'btn danger', type: 'button', text: 'Erase everything and start over' }), () => {
-      finish(false); data = fresh(); save(); closeForm(); hideLock(); ui.tab = 'trans'; render(); toast('Ledger was reset. You can restore a backup under More.');
+      finish(false); const cl = data.cloud; data = fresh(); data.cloud = cl; save(true); receipts.clear().catch(() => {}); closeForm(); hideLock(); ui.tab = 'trans'; render(); toast('Ledger was reset. You can restore a backup under More.');
     }));
     openInfo('Forgot your PIN?', [
       el('p', { class: 'hint', text: hasWay ? 'Prove it is you with one of these, then choose a new PIN. Your transactions stay exactly as they are.' : "This PIN was set before recovery options existed, so Ledger can't confirm it's you. You can replace what's on this phone with a backup file, or erase it and start again. Keep trying your PIN first if you can." }),
@@ -1339,7 +1610,7 @@
   });
   let hiddenAt = 0;
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) { hiddenAt = Date.now(); return; }
+    if (document.hidden) { hiddenAt = Date.now(); if (data.cloud && data.cloud.dirty && tokenValid()) cloudBackup().catch(() => {}); return; }
     if (data.pin && hiddenAt && Date.now() - hiddenAt > 60000 && ($('lock').hidden || lock.mode !== 'unlock')) showLock('unlock');
     runRecurring();
     if (swReg) swReg.update().catch(() => {});
@@ -1430,6 +1701,8 @@
     openInfo(`What's new in v${APP_VERSION}`, [
       el('p', { class: 'hint', text: 'All your transactions, budgets, goals and settings carried over.' }),
       el('ul', { class: 'steps' },
+        li('Receipt photos: take or choose a photo when adding an expense. A paperclip marks entries that have one; tap the photo to see it full size.'),
+        li('Backup files now include your receipt photos.'),
         li('Leftover money now carries into the next month. You will see "Brought forward" at the start of each month and on the summary card.'),
         li('Unspent budget rolls over: what a category did not use is added to its limit next month.'),
         li('New category picker: colourful tiles showing how much each budget has left, and a "+ New category" tile to add one on the spot.'),
@@ -1452,6 +1725,7 @@
   /* ================= boot ================= */
   const h = location.hash.slice(1); if (TITLES[h]) ui.tab = h;
   document.querySelectorAll('#bottomNav button svg').forEach(svg => { const w = el('span', { class: 'ico' }); svg.replaceWith(w); w.append(svg); });
+  if (cloudOn() && navigator.onLine && (data.cloud || !data.onboarded)) loadGis().catch(() => {});
   runRecurring(true);
   themeUI();
   render();
