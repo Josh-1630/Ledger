@@ -4,7 +4,7 @@
   const $ = id => document.getElementById(id);
   const WARN_AT = 0.8;
   const KEY = 'spending-ledger-app-v1';
-  const APP_VERSION = '9';
+  const APP_VERSION = '10';
   const SNAP_KEY = 'spending-ledger-safety-copy';
   const SW = ['--c1', '--c2', '--c3', '--c4', '--c5', '--c6', '--c7', '--c8'];
   const GROUPS = ['Cash', 'Bank account', 'Mobile money', 'Card', 'Savings', 'Loan', 'Other'];
@@ -737,6 +737,7 @@
       } }))));
     box.append(behindTheScenes());
     box.append(el('p', { class: 'hint', style: 'text-align:center', text: `Spending Ledger v${APP_VERSION} · works offline · ${data.cloud ? `backed up to ${data.cloud.email || 'Google'}` : 'your data never leaves this device'}` }));
+    box.append(el('p', { class: 'hint', style: 'text-align:center' }, el('a', { href: 'about.html', text: 'About Ledger' }), ' · ', el('a', { href: 'privacy.html', text: 'Privacy policy' })));
     return box;
   }
 
@@ -1165,7 +1166,7 @@
     loadGis().catch(() => {});
     const c = data.cloud;
     if (!c) return el('div', { class: 'panel' }, el('div', { class: 'panel-head' }, el('h2', { text: 'Google backup' }), el('span', { class: 'pill muted', text: 'Off' })),
-      el('p', { class: 'hint', text: 'Sign in with Google and Ledger backs up to a private folder in your Google Drive, like WhatsApp does. On a new phone, sign in and restore everything, receipts included.' }),
+      el('p', { class: 'hint' }, 'Sign in with Google and Ledger backs up to a private folder in your Google Drive, like WhatsApp does. On a new phone, sign in and restore everything, receipts included. ', el('a', { href: 'privacy.html', text: 'How your data is handled' })),
       el('div', {}, el('button', { class: 'btn primary', type: 'button', text: 'Sign in with Google', onclick: () => connectGoogle('connect') })));
     return el('div', { class: 'panel' }, el('div', { class: 'panel-head' }, el('h2', { text: 'Google backup' }), el('span', { class: 'pill ok', text: 'On' })),
       el('div', { class: 'row-list' },
