@@ -4,7 +4,7 @@
   const $ = id => document.getElementById(id);
   const WARN_AT = 0.8;
   const KEY = 'spending-ledger-app-v1';
-  const APP_VERSION = '11';
+  const APP_VERSION = '12';
   const SNAP_KEY = 'spending-ledger-safety-copy';
   const SW = ['--c1', '--c2', '--c3', '--c4', '--c5', '--c6', '--c7', '--c8'];
   const GROUPS = ['Cash', 'Bank account', 'Mobile money', 'Card', 'Savings', 'Loan', 'Other'];
@@ -175,7 +175,7 @@
 
   /* ================= render ================= */
   const TITLES = { trans: 'Transactions', stats: 'Stats', budget: 'Budget', goals: 'Goals', more: 'More' };
-  const SUBS = { trans: [['daily', 'Daily'], ['calendar', 'Calendar'], ['monthly', 'Monthly']], stats: [['categories', 'Categories'], ['insights', 'Insights']] };
+  const SUBS = { trans: [['daily', 'Daily'], ['calendar', 'Calendar'], ['monthly', 'Monthly']], stats: [['categories', 'Categories'], ['insights', 'Insights'], ['report', 'Report']] };
   const editingInline = () => ui.editBudget || ui.editIncome || ui.editAccount;
 
   function render() {
@@ -197,7 +197,7 @@
     $('fab').classList.toggle('pulse', !data.txs.length && data.onboarded);
     renderAlerts(); renderBanner();
     const view = ui.tab === 'trans' ? { daily: viewDaily, calendar: viewCalendar, monthly: viewMonthly }[sub]()
-      : ui.tab === 'stats' ? (sub === 'insights' ? viewInsights() : viewStats())
+      : ui.tab === 'stats' ? (sub === 'insights' ? viewInsights() : sub === 'report' ? viewReport() : viewStats())
       : ui.tab === 'budget' ? viewBudget() : ui.tab === 'goals' ? viewGoals() : viewMore();
     const main = $('main'); main.replaceChildren(view);
     const key = `${ui.tab}:${sub || ''}:${ui.month}`;
@@ -521,6 +521,315 @@
     const big = monthTxs(m).filter(t => t.type === 'expense').sort((a, b) => b.amountCents - a.amountCents)[0];
     const bigPanel = big ? el('div', { class: 'panel' }, el('span', { class: 'label', text: 'Biggest expense this month' }), txRow(big)) : null;
     return el('div', { class: 'stack' }, kpis, nospend, trend, moverPanel, bigPanel);
+  }
+
+  /* ---------- Stats: monthly report (on screen and as PDF) ---------- */
+  // One model feeds both the screen and the PDF. For the month in progress, figures run to today and are
+  // compared with the same days of the previous month, so a part month is never set against a full one.
+  const niceScale = max => { const raw = Math.max(max, 1) / 4, mag = Math.pow(10, Math.floor(Math.log10(raw))); const step = [1, 2, 2.5, 5, 10].map(k => k * mag).find(s => s >= raw); return { step, top: step * 4 }; };
+  const dayOf = t => +t.date.slice(8);
+  function reportModel(m, fmt = money) {
+    const p = shiftMonth(m, -1), todayM = monthOf(todayISO());
+    const isCur = m === todayM, dm = daysIn(m), dp = daysIn(p);
+    const upTo = isCur ? new Date().getDate() : dm, prevUpTo = Math.min(upTo, dp), partial = isCur && upTo < dm;
+    const mName = monthName(m, { month: 'long' }), pName = monthName(p, { month: 'long' }), pShort = monthName(p, { month: 'short' });
+    const mtAll = monthTxs(m), mt = mtAll.filter(t => dayOf(t) <= upTo), pt = monthTxs(p), ps = pt.filter(t => dayOf(t) <= prevUpTo);
+    const cur = totals(mt), same = totals(ps), full = totals(pt);
+    const series = (list, days, cumulative) => { const a = Array(days).fill(0); list.forEach(t => { if (t.type === 'expense') a[dayOf(t) - 1] += t.amountCents; }); if (cumulative) for (let i = 1; i < days; i++) a[i] += a[i - 1]; return a; };
+    const cumCur = series(mt, dm, true).slice(0, upTo), cumPrev = series(pt, dp, true), daily = series(mt, dm, false).slice(0, upTo);
+    const group = list => { const g = new Map(); list.forEach(t => { if (t.type !== 'expense') return; const k = expCat(t.categoryId) ? t.categoryId : 'none'; g.set(k, (g.get(k) || 0) + t.amountCents); }); return g; };
+    const gC = group(mt), gS = group(ps), gF = group(pt);
+    const cats = [...new Set([...gC.keys(), ...gS.keys(), ...gF.keys()])].map(k => {
+      const c = expCat(k), r = { id: k, name: c ? c.name : 'Uncategorised', color: c ? c.color : '--muted', cur: gC.get(k) || 0, same: gS.get(k) || 0, full: gF.get(k) || 0, limit: c ? limitFor(c, m) : null };
+      return { ...r, change: r.cur - r.same, pct: r.same ? (r.cur - r.same) / r.same : null, share: cur.exp ? r.cur / cur.exp : 0 };
+    }).sort((a, b) => b.cur - a.cur || b.full - a.full);
+    const months = []; for (let i = 5; i >= 0; i--) months.push(shiftMonth(m, -i));
+    const trend = months.map(k => ({ m: k, ...totals(monthTxs(k).filter(t => k !== m || dayOf(t) <= upTo)) }));
+    const history = trend.slice(0, 5).filter(x => x.inc || x.exp), avg6 = history.length ? Math.round(history.reduce((s, x) => s + x.exp, 0) / history.length) : null;
+    const top = mt.filter(t => t.type === 'expense').sort((a, b) => b.amountCents - a.amountCents).slice(0, 8);
+    const rate = t => t.inc ? (t.inc - t.exp) / t.inc : null;
+    const capped = data.categories.filter(c => limitFor(c, m) != null);
+    const budget = capped.reduce((s, c) => s + limitFor(c, m), 0), used = capped.reduce((s, c) => s + (gC.get(c.id) || 0), 0);
+    const over = capped.map(c => ({ c, over: (gC.get(c.id) || 0) - limitFor(c, m) })).filter(x => x.over > 0).sort((a, b) => b.over - a.over);
+    const noSpend = Array.from({ length: upTo }, (_, i) => i + 1).filter(d => !mt.some(t => t.type === 'expense' && dayOf(t) === d)).length;
+    // Month-end estimate: the rest of last month's spending, scaled by how this month compares so far.
+    // This keeps one-off bills paid early (rent) from being multiplied across the month.
+    const projection = !partial || !upTo ? null : same.exp && full.exp ? Math.round(cur.exp + (full.exp - same.exp) * (cur.exp / same.exp)) : Math.round(cur.exp / upTo * dm);
+    const sameLabel = partial ? `1-${prevUpTo} ${pShort}` : pName;
+    const periodNote = partial ? `Month to date: 1-${upTo} ${mName}, compared with 1-${prevUpTo} ${pName}` : `Full month, compared with ${pName}`;
+    const pctText = (a, b) => { if (!b) return a ? `new vs ${sameLabel}` : `same as ${sameLabel}`; const v = Math.round((a - b) / Math.abs(b) * 100); return `${v > 0 ? '+' : ''}${v}% vs ${sameLabel}`; };
+    const tone = (a, b, upGood) => a === b || !b ? 'flat' : (a > b) === upGood ? 'good' : 'bad';
+    const kpis = [
+      { label: partial ? 'Spent so far' : 'Spent', value: cur.exp, kind: 'exp', delta: pctText(cur.exp, same.exp), tone: tone(cur.exp, same.exp, false) },
+      { label: 'Income', value: cur.inc, kind: 'inc', delta: pctText(cur.inc, same.inc), tone: tone(cur.inc, same.inc, true) },
+      { label: 'Net', value: cur.tot, kind: cur.tot < 0 ? 'exp' : 'fg', delta: same.inc || same.exp ? `${fmt(same.tot)} in ${sameLabel}` : 'nothing to compare yet', tone: tone(cur.tot, same.tot, true) },
+      { label: 'Saved of income', pct: rate(cur), kind: rate(cur) == null ? 'fg' : rate(cur) >= 0 ? 'ok' : 'exp', delta: rate(same) == null ? 'no income to compare' : `${Math.round(rate(same) * 100)}% in ${sameLabel}`, tone: rate(cur) == null || rate(same) == null ? 'flat' : rate(cur) >= rate(same) ? 'good' : 'bad' },
+    ];
+    // plain-language findings
+    const F = [];
+    if (!cur.exp && !cur.inc) F.push({ tone: 'info', text: `No entries for ${mName} yet.` });
+    if (cur.exp || same.exp) {
+      if (same.exp) { const v = Math.round((cur.exp - same.exp) / same.exp * 100); F.push({ tone: v > 0 ? 'bad' : 'good', text: `${partial ? `So far in ${mName} you have spent` : `You spent`} ${fmt(cur.exp)}, ${Math.abs(v)}% ${v > 0 ? 'more' : 'less'} than ${partial ? `the same ${prevUpTo} days of ${pName}` : pName} (${fmt(same.exp)}).` }); }
+      else if (cur.exp) F.push({ tone: 'info', text: `You spent ${fmt(cur.exp)}${partial ? ' so far' : ''}. There was no spending in ${sameLabel} to compare with.` });
+    }
+    if (projection != null && cur.exp) F.push({ tone: full.exp && projection > full.exp ? 'bad' : 'info', text: same.exp && full.exp ? `If the rest of ${mName} goes like the rest of ${pName}, it ends at about ${fmt(projection)}, against ${fmt(full.exp)} for all of ${pName}.` : `At this pace ${mName} ends at about ${fmt(projection)}.` });
+    const ups = cats.filter(r => r.change > 0).sort((a, b) => b.change - a.change), downs = cats.filter(r => r.change < 0).sort((a, b) => a.change - b.change);
+    if (ups[0]) F.push({ tone: 'bad', text: `${ups[0].name} rose the most: ${fmt(ups[0].cur)} against ${fmt(ups[0].same)} (+${fmt(ups[0].change)}${ups[0].pct != null ? `, +${Math.round(ups[0].pct * 100)}%` : ''}).` });
+    if (downs[0]) F.push({ tone: 'good', text: `${downs[0].name} fell the most: ${fmt(downs[0].cur)} against ${fmt(downs[0].same)} (-${fmt(-downs[0].change)}).` });
+    if (cats[0] && cur.exp) F.push({ tone: 'info', text: `${cats[0].name} was your biggest category, ${Math.round(cats[0].share * 100)}% of spending${cats[1] ? `, followed by ${cats[1].name} (${Math.round(cats[1].share * 100)}%)` : ''}.` });
+    if (over.length) F.push({ tone: 'bad', text: `Over budget: ${over.slice(0, 3).map(x => `${x.c.name} by ${fmt(x.over)}`).join(', ')}.` });
+    else if (budget) F.push({ tone: 'good', text: `All ${capped.length} budgets are within their limits, with ${Math.round(used / budget * 100)}% of the ${fmt(budget)} total used.` });
+    if (rate(cur) != null) F.push({ tone: rate(cur) >= 0.2 ? 'good' : rate(cur) >= 0 ? 'info' : 'bad', text: `You kept ${Math.round(rate(cur) * 100)}% of your income${rate(same) != null ? ` (${Math.round(rate(same) * 100)}% in ${sameLabel})` : ''}.` });
+    if (avg6 && cur.exp && !partial) { const v = Math.round((cur.exp - avg6) / avg6 * 100); F.push({ tone: v > 0 ? 'bad' : 'good', text: `${mName} was ${Math.abs(v)}% ${v > 0 ? 'above' : 'below'} your recent monthly average of ${fmt(avg6)}.` }); }
+    if (upTo) F.push({ tone: noSpend >= upTo / 3 ? 'good' : 'info', text: `${noSpend} of ${upTo} days had no spending.` });
+    if (top[0]) { const c = expCat(top[0].categoryId); F.push({ tone: 'info', text: `Largest expense: ${top[0].note || (c ? c.name : 'Expense')}, ${fmt(top[0].amountCents)} on ${niceDate(top[0].date)}.` }); }
+    return { m, p, mName, pName, pShort, isCur, partial, upTo, prevUpTo, dm, dp, cur, same, full, cumCur, cumPrev, daily, cats, trend, top, kpis, findings: F, budget, used, projection, periodNote, sameLabel, avg6 };
+  }
+
+  // ----- screen charts (SVG, theme-aware) -----
+  function svgCumulative(R) {
+    const W = 340, H = 190, L = 42, Rm = 12, T = 10, B = 22, days = Math.max(R.dm, R.dp);
+    const { step, top } = niceScale(Math.max(...R.cumCur, ...R.cumPrev, R.projection || 0));
+    const x = i => L + (W - L - Rm) * (i / (days - 1)), y = v => T + (H - T - B) * (1 - v / top);
+    let s = '';
+    for (let i = 0; i <= 4; i++) s += `<line class="gl" x1="${L}" x2="${W - Rm}" y1="${y(step * i)}" y2="${y(step * i)}"/><text x="${L - 5}" y="${y(step * i) + 3}" text-anchor="end">${compact(step * i)}</text>`;
+    [1, 5, 10, 15, 20, 25, days].forEach(d => { s += `<text x="${x(d - 1)}" y="${H - 6}" text-anchor="middle">${d}</text>`; });
+    const line = (vals, color, dash, w) => `<polyline points="${vals.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ')}" fill="none" stroke="${color}" stroke-width="${w}" ${dash ? 'stroke-dasharray="4 3"' : ''} stroke-linejoin="round" stroke-linecap="round"/>`;
+    if (R.cumCur.length) s += `<polygon points="${x(0)},${y(0)} ${R.cumCur.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ')} ${x(R.cumCur.length - 1)},${y(0)}" fill="var(--exp)" fill-opacity=".12"/>`;
+    s += line(R.cumPrev, 'var(--muted)', true, 1.8);
+    if (R.projection && R.cumCur.length) s += `<line x1="${x(R.cumCur.length - 1)}" y1="${y(R.cumCur[R.cumCur.length - 1])}" x2="${x(R.dm - 1)}" y2="${y(R.projection)}" stroke="var(--exp)" stroke-width="1.4" stroke-dasharray="2 3"/>`;
+    if (R.cumCur.length) { s += line(R.cumCur, 'var(--exp)', false, 2.6); const i = R.cumCur.length - 1; s += `<circle cx="${x(i)}" cy="${y(R.cumCur[i])}" r="3.5" fill="var(--exp)"/>`; }
+    return svgEl(`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Running total of spending, ${R.mName} against ${R.pName}">${s}</svg>`);
+  }
+  function svgDaily(R) {
+    const W = 340, H = 150, L = 42, Rm = 8, T = 8, B = 20, n = R.dm, vals = R.daily;
+    const avg = R.upTo ? R.cur.exp / R.upTo : 0, { step, top } = niceScale(Math.max(...vals, avg, 1));
+    const slot = (W - L - Rm) / n, y = v => T + (H - T - B) * (1 - v / top);
+    let s = '';
+    for (let i = 0; i <= 4; i++) s += `<line class="gl" x1="${L}" x2="${W - Rm}" y1="${y(step * i)}" y2="${y(step * i)}"/><text x="${L - 5}" y="${y(step * i) + 3}" text-anchor="end">${compact(step * i)}</text>`;
+    vals.forEach((v, i) => { if (v) s += `<rect x="${L + i * slot + slot * .15}" y="${y(v)}" width="${slot * .7}" height="${H - B - y(v)}" rx="1.5" fill="var(--exp)"><title>${i + 1}: ${money(v)}</title></rect>`; });
+    [1, 10, 20, n].forEach(d => { s += `<text x="${L + (d - .5) * slot}" y="${H - 5}" text-anchor="middle">${d}</text>`; });
+    if (avg) s += `<line x1="${L}" x2="${W - Rm}" y1="${y(avg)}" y2="${y(avg)}" stroke="var(--accent)" stroke-width="1.4" stroke-dasharray="4 3"/><text x="${W - Rm}" y="${y(avg) - 4}" text-anchor="end" style="fill:var(--accent)">avg ${compact(avg)}</text>`;
+    return svgEl(`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Spending each day in ${R.mName}">${s}</svg>`);
+  }
+  function svgTrend(R) {
+    const W = 340, H = 180, L = 42, Rm = 6, T = 8, B = 22, n = R.trend.length;
+    const { step, top } = niceScale(Math.max(...R.trend.map(t => Math.max(t.inc, t.exp)), 1));
+    const slot = (W - L - Rm) / n, bw = slot * .3, y = v => T + (H - T - B) * (1 - v / top);
+    let s = '';
+    for (let i = 0; i <= 4; i++) s += `<line class="gl" x1="${L}" x2="${W - Rm}" y1="${y(step * i)}" y2="${y(step * i)}"/><text x="${L - 5}" y="${y(step * i) + 3}" text-anchor="end">${compact(step * i)}</text>`;
+    const pts = [];
+    R.trend.forEach((t, i) => {
+      const cx = L + i * slot + slot / 2;
+      s += `<rect x="${cx - bw - 1}" y="${y(t.inc)}" width="${bw}" height="${H - B - y(t.inc)}" rx="2" fill="var(--inc)"><title>Income ${money(t.inc)}</title></rect>`;
+      s += `<rect x="${cx + 1}" y="${y(t.exp)}" width="${bw}" height="${H - B - y(t.exp)}" rx="2" fill="var(--exp)"><title>Spending ${money(t.exp)}</title></rect>`;
+      s += `<text x="${cx}" y="${H - 6}" text-anchor="middle"${t.m === R.m ? ' style="fill:var(--fg);font-weight:600"' : ''}>${monthName(t.m, { month: 'short' })}</text>`;
+      if ((t.inc || t.exp) && t.tot >= 0) pts.push(`${cx},${y(t.tot)}`);
+    });
+    if (pts.length > 1) s += `<polyline points="${pts.join(' ')}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round"/>`;
+    return svgEl(`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Income, spending and money left over for six months">${s}</svg>`);
+  }
+  const legend = items => el('div', { class: 'legend-inline' }, items.map(([c, t, dash]) => el('span', {}, el('i', { class: `swatch${dash ? ' dash' : ''}`, style: `background:${c}` }), t)));
+
+  let pdfLib = null;
+  function loadPdfLib() {
+    if (window.jspdf) return Promise.resolve(window.jspdf);
+    return pdfLib || (pdfLib = new Promise((res, rej) => {
+      const s = el('script', { src: 'vendor/jspdf.umd.min.js' });
+      s.onload = () => res(window.jspdf); s.onerror = () => { pdfLib = null; s.remove(); rej(new Error('the PDF tool could not load')); };
+      document.head.append(s);
+    }));
+  }
+  function viewReport() {
+    const R = reportModel(ui.month);
+    loadPdfLib().catch(() => {});
+    const exportBtn = el('button', { class: 'btn primary', type: 'button', text: 'Export PDF', onclick: () => exportReportPDF(ui.month) });
+    const head = el('div', { class: 'panel report-head' }, el('div', { class: 'panel-head' }, el('div', {}, el('h2', { text: `${R.mName} report` }), el('div', { class: 'hint', text: R.periodNote })), exportBtn));
+    const kpis = el('div', { class: 'kpis' }, R.kpis.map(k => el('div', { class: 'kpi' }, el('span', { class: 'label', text: k.label }),
+      el('span', { class: `big num ${k.kind === 'ok' ? 'good' : k.kind}`, text: k.pct !== undefined ? (k.pct == null ? '–' : `${Math.round(k.pct * 100)}%`) : money(k.value) }),
+      el('span', { class: `delta ${k.tone === 'good' ? 'good' : k.tone === 'bad' ? 'bad' : 'hint'}`, text: k.delta }))));
+    const findings = el('div', { class: 'panel' }, el('h2', { text: 'Key findings' }), el('ul', { class: 'findings' }, R.findings.map(f => el('li', { class: f.tone }, f.text))));
+    const mtd = el('div', { class: 'panel chart' }, el('div', { class: 'panel-head' }, el('h2', { text: R.partial ? 'Month to date' : 'Spending through the month' }),
+      legend([['var(--exp)', R.mName], ['var(--muted)', R.pName, true]])), svgCumulative(R),
+      el('p', { class: 'hint', text: R.partial ? `By day ${R.upTo}: ${money(R.cur.exp)} this month against ${money(R.same.exp)} last month.${R.projection ? ` The dotted line is the month-end estimate: about ${money(R.projection)}.` : ''}` : `Running total: ${money(R.cur.exp)} in ${R.mName} against ${money(R.full.exp)} in ${R.pName}.` }));
+    const maxC = Math.max(1, ...R.cats.map(r => Math.max(r.cur, r.same)));
+    const catList = el('div', { class: 'cmp-list' }, R.cats.length ? R.cats.map(r => {
+      const pct = r.pct == null ? (r.cur ? 'new' : '–') : `${r.pct > 0 ? '+' : ''}${Math.round(r.pct * 100)}%`;
+      const tn = r.change > 0 ? 'bad' : r.change < 0 ? 'good' : 'flat';
+      return el('div', { class: 'cmp' },
+        el('div', { class: 'cmp-top' }, el('span', { class: 'cmp-name' }, el('i', { class: 'swatch', style: `background:var(${r.color})` }), r.name), el('b', { class: 'num', text: money(r.cur) }), el('span', { class: `chg ${tn}`, text: pct })),
+        el('div', { class: 'cmp-bars' }, el('i', { class: 'now', style: `width:${r.cur / maxC * 100}%;background:var(${r.color})` }), el('i', { class: 'then', style: `width:${r.same / maxC * 100}%` })),
+        el('div', { class: 'cmp-sub num' }, `${R.sameLabel}: ${money(r.same)}`, R.partial ? ` · all of ${R.pShort}: ${money(r.full)}` : '', r.limit != null ? ` · budget ${Math.round(r.cur / r.limit * 100)}% used` : ''));
+    }) : el('div', { class: 'empty-state', text: `No spending in ${R.mName} or ${R.pName} yet.` }));
+    const cmp = el('div', { class: 'panel' }, el('div', { class: 'panel-head' }, el('h2', { text: 'Month on month by category' }), legend([['var(--accent)', 'This month'], ['var(--line)', R.sameLabel]])), catList);
+    const daily = el('div', { class: 'panel chart' }, el('div', { class: 'panel-head' }, el('h2', { text: 'Daily spending' }), el('span', { class: 'hint', text: `${R.upTo} day${R.upTo === 1 ? '' : 's'}` })), svgDaily(R));
+    const trend = el('div', { class: 'panel chart' }, el('div', { class: 'panel-head' }, el('h2', { text: '6-month trend' }), legend([['var(--inc)', 'Income'], ['var(--exp)', 'Spending'], ['var(--accent)', 'Left over']])), svgTrend(R),
+      R.avg6 ? el('p', { class: 'hint', text: `Average spending over the previous months: ${money(R.avg6)} a month.` }) : null);
+    const top = R.top.length ? el('div', { class: 'panel' }, el('h2', { text: 'Largest expenses' }), el('div', { class: 'day' }, R.top.map(txRow))) : null;
+    return el('div', { class: 'stack' }, head, kpis, findings, mtd, cmp, daily, trend, top);
+  }
+
+  // ----- PDF (vector drawing with jsPDF; standard fonts, so text is kept to Latin-1) -----
+  const RGB = { accent: [29, 107, 87], inc: [42, 95, 196], exp: [196, 65, 45], muted: [91, 106, 100], line: [213, 220, 217], sunk: [236, 240, 238], fg: [23, 33, 29], ok: [44, 122, 75], over: [180, 42, 42], prev: [170, 182, 177], white: [255, 255, 255] };
+  const CAT_RGB = { '--c1': [29, 107, 87], '--c2': [59, 95, 168], '--c3': [162, 97, 10], '--c4': [138, 63, 143], '--c5': [180, 71, 58], '--c6': [79, 122, 31], '--c7': [42, 127, 149], '--c8': [107, 91, 69], '--muted': [91, 106, 100] };
+  const pdfText = s => String(s).replace(/[−‐-―]/g, '-').replace(/[    ]/g, ' ').replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/…/g, '...').replace(/[^\x20-\x7e\xa0-\xff]/g, '');
+  const moneyP = c => { try { return pdfText(new Intl.NumberFormat(undefined, { style: 'currency', currency: data.currency, currencyDisplay: 'code' }).format(c / 100)); } catch { return (c / 100).toFixed(2); } };
+  async function exportReportPDF(m) {
+    showUpdating('Preparing your PDF…');
+    try {
+      const { jsPDF } = await loadPdfLib();
+      const fmt = moneyP, R = reportModel(m, fmt);
+      const doc = new jsPDF({ unit: 'mm', format: 'a4', compress: true });
+      const PW = 210, PH = 297, M = 14, CW = PW - 2 * M; let y = 0;
+      const fill = k => doc.setFillColor(...(Array.isArray(k) ? k : RGB[k])), stroke = k => doc.setDrawColor(...(Array.isArray(k) ? k : RGB[k])), ink = k => doc.setTextColor(...(Array.isArray(k) ? k : RGB[k]));
+      const font = (size, style = 'normal') => { doc.setFont('helvetica', style); doc.setFontSize(size); };
+      const T = (s, x, yy, o) => doc.text(pdfText(s), x, yy, o);
+      const ensure = h => { if (y + h > PH - 18) { doc.addPage(); y = 18; } };
+      const section = (title, note) => { ensure(note ? 22 : 16); y += 4; font(12.5, 'bold'); ink('fg'); T(title, M, y); if (note) { font(8.5); ink('muted'); T(note, M, y + 5); y += 5; } y += 5; };
+      const axisY = (x0, y0, w, h, step, top) => { font(7); for (let i = 0; i <= 4; i++) { const yy = y0 + h - h * (step * i / top); stroke('line'); doc.setLineWidth(.2); doc.line(x0, yy, x0 + w, yy); ink('muted'); T(pdfText(compact(step * i)), x0 - 2, yy + 1, { align: 'right' }); } };
+      const legendP = (items, x, yy) => { font(8); items.forEach(([k, t]) => { fill(k); doc.rect(x, yy - 2.4, 3, 3, 'F'); ink('muted'); T(t, x + 4.5, yy); x += 6 + doc.getTextWidth(pdfText(t)) + 5; }); };
+
+      // header band
+      fill('accent'); doc.rect(0, 0, PW, 36, 'F');
+      ink('white'); font(9, 'bold'); T('LEDGER  ·  MONTHLY SPENDING REPORT', M, 11);
+      font(22, 'bold'); T(`${monthName(m)}`, M, 23);
+      font(9); T(R.periodNote, M, 30.5);
+      font(8); T(`Generated ${new Date().toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' })}`, PW - M, 11, { align: 'right' });
+      T(`Amounts in ${data.currency}`, PW - M, 16, { align: 'right' });
+      y = 44;
+
+      // KPI boxes
+      const bw = (CW - 9) / 4;
+      R.kpis.forEach((k, i) => {
+        const x = M + i * (bw + 3);
+        fill('sunk'); doc.roundedRect(x, y, bw, 25, 2.5, 2.5, 'F');
+        font(7, 'bold'); ink('muted'); T(k.label.toUpperCase(), x + 4, y + 6.5);
+        font(12, 'bold'); ink(k.kind === 'inc' ? 'inc' : k.kind === 'exp' ? 'exp' : k.kind === 'ok' ? 'ok' : 'fg');
+        T(k.pct !== undefined ? (k.pct == null ? '-' : `${Math.round(k.pct * 100)}%`) : fmt(k.value), x + 4, y + 14.5);
+        font(7); ink(k.tone === 'good' ? 'ok' : k.tone === 'bad' ? 'over' : 'muted');
+        doc.text(doc.splitTextToSize(pdfText(k.delta), bw - 7).slice(0, 2), x + 4, y + 19.5);
+      });
+      y += 33;
+
+      // key findings
+      section('Key findings');
+      font(9.5);
+      R.findings.forEach(f => {
+        const lines = doc.splitTextToSize(pdfText(f.text), CW - 8);
+        ensure(lines.length * 4.6 + 2);
+        fill(f.tone === 'good' ? 'ok' : f.tone === 'bad' ? 'over' : 'accent'); doc.circle(M + 1.6, y - 1.2, 1.1, 'F');
+        ink('fg'); doc.text(lines, M + 6, y); y += lines.length * 4.6 + 1.6;
+      });
+
+      // month to date running total
+      section(R.partial ? 'Month to date' : 'Spending through the month', R.partial ? `Running total of spending, day 1 to ${R.upTo}, against ${R.pName}` : `Running total of spending each day, against ${R.pName}`);
+      ensure(70);
+      { const x0 = M + 16, w = CW - 18, h = 52, y0 = y, days = Math.max(R.dm, R.dp);
+        const { step, top } = niceScale(Math.max(...R.cumCur, ...R.cumPrev, R.projection || 0));
+        axisY(x0, y0, w, h, step, top);
+        const X = i => x0 + w * (i / (days - 1)), Y = v => y0 + h - h * (v / top);
+        const poly = (vals, k, wd, dash) => { stroke(k); doc.setLineWidth(wd); if (dash) doc.setLineDashPattern(dash, 0); for (let i = 1; i < vals.length; i++) doc.line(X(i - 1), Y(vals[i - 1]), X(i), Y(vals[i])); doc.setLineDashPattern([], 0); };
+        poly(R.cumPrev, 'prev', .5, [1.2, 1]);
+        if (R.projection && R.cumCur.length) { stroke('exp'); doc.setLineWidth(.35); doc.setLineDashPattern([.6, 1], 0); doc.line(X(R.cumCur.length - 1), Y(R.cumCur[R.cumCur.length - 1]), X(R.dm - 1), Y(R.projection)); doc.setLineDashPattern([], 0); }
+        poly(R.cumCur, 'exp', .8);
+        if (R.cumCur.length) { const i = R.cumCur.length - 1; fill('exp'); doc.circle(X(i), Y(R.cumCur[i]), .9, 'F'); font(7.5, 'bold'); ink('exp'); T(fmt(R.cumCur[i]), Math.min(X(i) + 2, x0 + w - 2), Y(R.cumCur[i]) - 2, { align: X(i) > x0 + w * .75 ? 'right' : 'left' }); }
+        font(7); ink('muted'); [1, 5, 10, 15, 20, 25, days].forEach(d => T(String(d), X(d - 1), y0 + h + 4, { align: 'center' }));
+        y = y0 + h + 9; legendP([['exp', monthName(m, { month: 'long' })], ['prev', R.pName]], x0, y);
+        y += 5.5; font(8.5); ink('muted'); T(R.partial ? `By day ${R.upTo}: ${fmt(R.cur.exp)} this month vs ${fmt(R.same.exp)} last month.${R.projection ? `  Month-end estimate (dotted): ${fmt(R.projection)}.` : ''}` : `${fmt(R.cur.exp)} in ${R.mName} vs ${fmt(R.full.exp)} in ${R.pName}.`, x0, y);
+        y += 6; }
+
+      // category comparison: paired bars + table
+      section('Month on month by category', R.partial ? `This month so far vs the same ${R.prevUpTo} days of ${R.pName}` : `${R.mName} vs ${R.pName}`);
+      if (!R.cats.length) { font(9.5); ink('muted'); T('No spending to compare yet.', M, y); y += 8; }
+      else {
+        const maxC = Math.max(1, ...R.cats.map(r => Math.max(r.cur, r.same))), labelW = 42, valW = 30, barW = CW - labelW - valW - 4;
+        R.cats.filter(r => r.cur || r.same).slice(0, 12).forEach(r => {
+          ensure(10);
+          font(8.5); ink('fg'); T(doc.splitTextToSize(pdfText(r.name), labelW - 2)[0], M, y + 3);
+          fill(CAT_RGB[r.color] || RGB.accent); doc.rect(M + labelW, y, Math.max(.4, barW * r.cur / maxC), 3, 'F');
+          fill('prev'); doc.rect(M + labelW, y + 3.8, Math.max(.4, barW * r.same / maxC), 2, 'F');
+          font(8, 'bold'); ink('fg'); T(fmt(r.cur), PW - M, y + 2.8, { align: 'right' });
+          font(7); ink('muted'); T(fmt(r.same), PW - M, y + 6.2, { align: 'right' });
+          y += 9;
+        });
+        legendP([['accent', 'This month'], ['prev', R.sameLabel]], M + labelW, y + 1); y += 6;
+        // table
+        const cols = R.partial ? [['Category', 38], ['This month', 28], ['Same days', 28], ['Change', 40], ['All of ' + R.pShort, 28], ['Budget', 20]] : [['Category', 46], ['This month', 32], [R.pShort, 32], ['Change', 44], ['Budget', 28]];
+        ensure(Math.min(R.cats.length + 2, 10) * 6.6 + 6);
+        const row = (cells, bold, shade, colours) => {
+          ensure(7); if (shade) { fill('sunk'); doc.rect(M, y - 4.4, CW, 6.6, 'F'); }
+          let x = M; cells.forEach((c, i) => { font(8, bold ? 'bold' : 'normal'); ink(colours && colours[i] || (bold ? 'muted' : 'fg')); const right = i > 0; T(c, right ? x + cols[i][1] - 2 : x + 2, y, right ? { align: 'right' } : undefined); x += cols[i][1]; });
+          y += 6.6;
+        };
+        y += 3; row(cols.map(c => c[0]), true, false);
+        stroke('line'); doc.setLineWidth(.3); doc.line(M, y - 4.6, M + CW, y - 4.6);
+        R.cats.forEach((r, i) => {
+          const chg = `${r.change > 0 ? '+' : r.change < 0 ? '-' : ''}${fmt(Math.abs(r.change))}${r.pct != null ? ` (${r.pct > 0 ? '+' : ''}${Math.round(r.pct * 100)}%)` : ''}`;
+          const tone = r.change > 0 ? 'over' : r.change < 0 ? 'ok' : 'muted';
+          const used = r.limit != null ? `${Math.round(r.cur / r.limit * 100)}%` : '-';
+          const cells = R.partial ? [doc.splitTextToSize(pdfText(r.name), 34)[0], fmt(r.cur), fmt(r.same), chg, fmt(r.full), used] : [doc.splitTextToSize(pdfText(r.name), 42)[0], fmt(r.cur), fmt(r.same), chg, used];
+          const colours = R.partial ? [null, null, 'muted', tone, 'muted', r.limit != null && r.cur > r.limit ? 'over' : 'muted'] : [null, null, 'muted', tone, r.limit != null && r.cur > r.limit ? 'over' : 'muted'];
+          row(cells, false, i % 2 === 1, colours);
+        });
+        const tot = R.partial ? ['Total', fmt(R.cur.exp), fmt(R.same.exp), `${R.cur.exp - R.same.exp >= 0 ? '+' : '-'}${fmt(Math.abs(R.cur.exp - R.same.exp))}`, fmt(R.full.exp), R.budget ? `${Math.round(R.used / R.budget * 100)}%` : '-'] : ['Total', fmt(R.cur.exp), fmt(R.same.exp), `${R.cur.exp - R.same.exp >= 0 ? '+' : '-'}${fmt(Math.abs(R.cur.exp - R.same.exp))}`, R.budget ? `${Math.round(R.used / R.budget * 100)}%` : '-'];
+        stroke('line'); doc.line(M, y - 4.6, M + CW, y - 4.6); row(tot, true, false, tot.map(() => 'fg'));
+      }
+
+      // daily spending
+      section('Daily spending', `Each day of ${R.mName}${R.partial ? ' so far' : ''}, with the daily average`);
+      ensure(48);
+      { const x0 = M + 16, w = CW - 18, h = 34, y0 = y, n = R.dm, avg = R.upTo ? R.cur.exp / R.upTo : 0;
+        const { step, top } = niceScale(Math.max(...R.daily, avg, 1)); axisY(x0, y0, w, h, step, top);
+        const slot = w / n; fill('exp');
+        R.daily.forEach((v, i) => { if (v) { const bh = h * v / top; doc.rect(x0 + i * slot + slot * .15, y0 + h - bh, slot * .7, bh, 'F'); } });
+        if (avg) { stroke('accent'); doc.setLineWidth(.4); doc.setLineDashPattern([1.2, 1], 0); const ay = y0 + h - h * avg / top; doc.line(x0, ay, x0 + w, ay); doc.setLineDashPattern([], 0); font(7, 'bold'); ink('accent'); T(`average ${fmt(avg)} a day`, x0 + w, ay - 1.5, { align: 'right' }); }
+        font(7); ink('muted'); [1, 5, 10, 15, 20, 25, n].forEach(d => T(String(d), x0 + (d - .5) * slot, y0 + h + 4, { align: 'center' }));
+        y = y0 + h + 10; }
+
+      // 6-month trend
+      section('6-month trend', 'Income and spending each month; the line is what was left over');
+      ensure(56);
+      { const x0 = M + 16, w = CW - 18, h = 40, y0 = y, n = R.trend.length;
+        const { step, top } = niceScale(Math.max(...R.trend.map(t => Math.max(t.inc, t.exp)), 1)); axisY(x0, y0, w, h, step, top);
+        const slot = w / n, bw2 = slot * .28, pts = [];
+        R.trend.forEach((t, i) => {
+          const cx = x0 + i * slot + slot / 2, hi = h * t.inc / top, he = h * t.exp / top;
+          fill('inc'); doc.rect(cx - bw2 - .4, y0 + h - hi, bw2, hi, 'F'); fill('exp'); doc.rect(cx + .4, y0 + h - he, bw2, he, 'F');
+          font(7.5, t.m === m ? 'bold' : 'normal'); ink(t.m === m ? 'fg' : 'muted'); T(monthName(t.m, { month: 'short' }), cx, y0 + h + 4, { align: 'center' });
+          if ((t.inc || t.exp) && t.tot >= 0) pts.push([cx, y0 + h - h * t.tot / top]);
+        });
+        stroke('accent'); doc.setLineWidth(.6); for (let i = 1; i < pts.length; i++) doc.line(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1]);
+        fill('accent'); pts.forEach(([px, py]) => doc.circle(px, py, .7, 'F'));
+        y = y0 + h + 10; legendP([['inc', 'Income'], ['exp', 'Spending'], ['accent', 'Left over']], x0, y);
+        if (R.avg6) { font(8.5); ink('muted'); T(`Average spending in the previous months: ${fmt(R.avg6)} a month`, PW - M, y, { align: 'right' }); }
+        y += 6; }
+
+      // largest expenses
+      if (R.top.length) {
+        ensure(R.top.length * 6.6 + 26);
+        section('Largest expenses');
+        const cols = [['Date', 26], ['Category', 44], ['Note', 82], ['Amount', 30]];
+        let x = M; font(8, 'bold'); ink('muted'); cols.forEach((c, i) => { T(c[0], i === 3 ? x + c[1] - 2 : x + 2, y, i === 3 ? { align: 'right' } : undefined); x += c[1]; });
+        y += 2; stroke('line'); doc.setLineWidth(.3); doc.line(M, y, M + CW, y); y += 4.6;
+        R.top.forEach((t, i) => {
+          ensure(7); if (i % 2) { fill('sunk'); doc.rect(M, y - 4.4, CW, 6.6, 'F'); }
+          const c = catOf(t), sb = subOf(t); let x2 = M; font(8); ink('fg');
+          const cells = [niceDate(t.date), (c ? c.name : 'Uncategorised') + (sb ? ` · ${sb.name}` : ''), t.note || '', fmt(t.amountCents)];
+          cells.forEach((v, j) => { const s = doc.splitTextToSize(pdfText(v), cols[j][1] - 4)[0] || ''; if (j === 3) { font(8, 'bold'); T(s, x2 + cols[j][1] - 2, y, { align: 'right' }); } else T(s, x2 + 2, y); x2 += cols[j][1]; });
+          y += 6.6;
+        });
+      }
+
+      // footer on every page
+      const pages = doc.getNumberOfPages();
+      for (let i = 1; i <= pages; i++) {
+        doc.setPage(i); stroke('line'); doc.setLineWidth(.3); doc.line(M, PH - 12, PW - M, PH - 12);
+        font(7.5); ink('muted'); T(`Ledger  ·  ${monthName(m)} report  ·  made on this device; nothing was uploaded`, M, PH - 7.5); T(`Page ${i} of ${pages}`, PW - M, PH - 7.5, { align: 'right' });
+      }
+      const blob = doc.output('blob');
+      $('updating').hidden = true;
+      if (await saveFile(`Ledger-report-${m}.pdf`, blob, 'application/pdf')) { toast('Report ready. Save it or share it from the menu that opened.'); buzz(); }
+    } catch (e) { $('updating').hidden = true; toast(`Couldn't make the PDF (${e.message}).`, 'over'); }
   }
 
   /* ---------- Budget ---------- */
@@ -1337,7 +1646,7 @@
 
   /* ================= backup / import ================= */
   async function saveFile(name, text, type) {
-    const blob = new Blob([text], { type });
+    const blob = text instanceof Blob ? text : new Blob([text], { type });
     try {
       const file = new File([blob], name, { type });
       if (/android|iphone|ipad|ipod/i.test(navigator.userAgent) && navigator.canShare && navigator.canShare({ files: [file] })) {
@@ -1756,6 +2065,7 @@
     openInfo(`What's new in v${APP_VERSION}`, [
       el('p', { class: 'hint', text: 'All your transactions, budgets, goals and settings carried over.' }),
       el('ul', { class: 'steps' },
+        li('Monthly report: Stats → Report compares this month with last month (month to date and by category), shows the 6-month trend and exports a PDF you can save or share.'),
         li('Fingerprint unlock: under More → Passcode & fingerprint, turn it on and open Ledger with your fingerprint (Face ID on iPhone). Your PIN stays as the backup.'),
         li('Google backup is on: sign in with Google under More and Ledger backs up to a private folder in your Google Drive. A new phone can restore everything, receipts included.'),
         li('Receipt photos: take or choose a photo when adding an expense. A paperclip marks entries that have one; tap the photo to see it full size.'),

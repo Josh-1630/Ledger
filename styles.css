@@ -441,3 +441,25 @@ button { cursor: pointer; }
 .bio-btn { display: inline-flex; align-items: center; gap: 10px; min-height: 48px; padding: 0 20px; border-radius: 99px; border: 1px solid var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 600; transition: transform .12s; }
 .bio-btn:active { transform: scale(.96); }
 .bio-btn svg { width: 26px; height: 26px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; }
+
+/* ---------- v12: monthly report ---------- */
+.report-head .panel-head { align-items: flex-start; }
+.findings { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+.findings li { position: relative; padding-left: 20px; line-height: 1.45; }
+.findings li::before { content: ""; position: absolute; left: 2px; top: .5em; width: 9px; height: 9px; border-radius: 50%; background: var(--accent); }
+.findings li.good::before { background: var(--ok); } .findings li.bad::before { background: var(--over); }
+.cmp-list { display: grid; }
+.cmp { display: grid; gap: 5px; padding: 11px 0; border-top: 1px solid var(--line); }
+.cmp:first-child { border-top: 0; }
+.cmp-top { display: flex; align-items: center; gap: 10px; }
+.cmp-name { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; font-weight: 600; overflow-wrap: anywhere; }
+.cmp-top b { font-weight: 600; }
+.chg { font-size: .74rem; font-weight: 700; padding: 2px 8px; border-radius: 99px; background: var(--sunk); color: var(--muted); font-family: var(--f-mono); }
+.chg.bad { background: var(--over-soft); color: var(--over); } .chg.good { background: var(--accent-soft); color: var(--ok); }
+.cmp-bars { display: grid; gap: 3px; }
+.cmp-bars i { display: block; height: 8px; border-radius: 4px; min-width: 2px; }
+.cmp-bars i.then { height: 5px; background: var(--line); }
+.cmp-sub { font-size: .76rem; color: var(--muted); }
+.legend-inline .swatch.dash { background: transparent !important; border: 1.5px dashed var(--muted); }
+@media (prefers-reduced-motion: no-preference) { #main.enter .cmp-bars i { animation: grow .8s cubic-bezier(.2,.8,.2,1) both; transform-origin: left center; } }
+.findings li.good, .findings li.bad { color: var(--fg); }
