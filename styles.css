@@ -436,3 +436,8 @@ button { cursor: pointer; }
 .viewer img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 8px; }
 .viewer-close { position: fixed; top: calc(12px + env(safe-area-inset-top, 0px)); right: max(12px, env(safe-area-inset-right, 0px)); background: rgba(255,255,255,.16); color: #fff; border: 0; border-radius: 99px; padding: 8px 16px; font-weight: 600; }
 @media (prefers-reduced-motion: no-preference) { .viewer { animation: fade .18s ease-out; } .rc-preview { animation: rise .25s ease-out both; } }
+
+/* ---------- v11: fingerprint unlock ---------- */
+.bio-btn { display: inline-flex; align-items: center; gap: 10px; min-height: 48px; padding: 0 20px; border-radius: 99px; border: 1px solid var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 600; transition: transform .12s; }
+.bio-btn:active { transform: scale(.96); }
+.bio-btn svg { width: 26px; height: 26px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; }

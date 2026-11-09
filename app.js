@@ -4,7 +4,7 @@
   const $ = id => document.getElementById(id);
   const WARN_AT = 0.8;
   const KEY = 'spending-ledger-app-v1';
-  const APP_VERSION = '10';
+  const APP_VERSION = '11';
   const SNAP_KEY = 'spending-ledger-safety-copy';
   const SW = ['--c1', '--c2', '--c3', '--c4', '--c5', '--c6', '--c7', '--c8'];
   const GROUPS = ['Cash', 'Bank account', 'Mobile money', 'Card', 'Savings', 'Loan', 'Other'];
@@ -710,13 +710,14 @@
     box.append(viewRecurring());
     // security
     const pinRow = (label, value, btnLabel, fn) => el('div', { class: 'row-item' }, el('span', { class: 'grow' }, label, el('div', { class: 'sub', text: value })), el('button', { class: 'btn small', type: 'button', text: btnLabel, onclick: fn }));
-    box.append(el('div', { class: 'panel' }, el('h2', { text: 'PIN lock' }),
-      el('p', { class: 'hint', text: data.pin ? 'Ledger asks for your PIN when it opens and after a minute in the background. Changing or removing it needs your current PIN.' : 'Lock the app with a 4 to 6 digit PIN so nobody who picks up your phone can open it.' }),
+    box.append(el('div', { class: 'panel' }, el('h2', { text: 'Passcode & fingerprint' }),
+      el('p', { class: 'hint', text: data.pin ? 'Ledger asks for your PIN (or fingerprint) when it opens and after a minute in the background. Changing or removing the PIN needs your current PIN.' : 'Lock the app with a 4 to 6 digit PIN so nobody who picks up your phone can open it. Once it is set, you can unlock with your fingerprint too.' }),
       el('div', { class: 'acts', style: 'justify-content:flex-start' },
         el('button', { class: 'btn primary small', type: 'button', text: data.pin ? 'Change PIN' : 'Set a PIN', onclick: setOrChangePin }),
         data.pin ? el('button', { class: 'btn small', type: 'button', text: 'Lock now', onclick: () => showLock('unlock') }) : null,
         data.pin ? el('button', { class: 'btn danger small', type: 'button', text: 'Remove PIN', onclick: removePin }) : null),
       data.pin ? el('div', { class: 'row-list' },
+        toggle('Fingerprint unlock', bioAvail === false ? "This phone or browser doesn't offer fingerprint or face unlock to web apps. Your PIN still protects Ledger." : 'Use your fingerprint (or face, on iPhone) instead of typing the PIN. Your fingerprint never leaves the phone.', !!data.pin.bio, () => (data.pin.bio ? bioDisable() : bioEnable())),
         pinRow('Recovery code', data.pin.rec ? `Set up on ${new Date(data.pin.rec.created).toLocaleDateString()}` : 'Not set up. You need it to reset a forgotten PIN.', data.pin.rec ? 'New code' : 'Create', newRecoveryCodeFlow),
         pinRow('Security question', data.pin.q ? data.pin.q.question : 'Optional second way to reset your PIN.', data.pin.q ? 'Change' : 'Add', securityQuestionFlow)) : null));
     const gp = googlePanel(); if (gp) box.append(gp);
@@ -755,7 +756,7 @@
     add('Transactions', `${data.txs.length}${dates.length ? ` (${niceDate(dates[0])} to ${niceDate(dates[dates.length - 1])})` : ''}`);
     add('Categories', `${data.categories.length} expense, ${data.incomeCategories.length} income, ${subs} subcategories`);
     add('Accounts · repeating · goals', `${data.accounts.length} · ${data.recurring.length} · ${data.goals.length}`);
-    add('PIN', data.pin ? `On (${data.pin.len} digits, stored only as a salted SHA-256 hash). Recovery: ${[data.pin.rec && 'code', data.pin.q && 'security question'].filter(Boolean).join(' and ') || 'none'}` : 'Off');
+    add('PIN', data.pin ? `On (${data.pin.len} digits, stored only as a salted SHA-256 hash). Recovery: ${[data.pin.rec && 'code', data.pin.q && 'security question'].filter(Boolean).join(' and ') || 'none'}. Fingerprint unlock: ${data.pin.bio ? 'on' : 'off'}` : 'Off');
     add('App version', `v${APP_VERSION}`);
     let snap = null; try { snap = JSON.parse(lsGet(SNAP_KEY)); } catch {}
     add('Safety copy from last update', snap ? `Saved ${new Date(snap.at).toLocaleString()} (from v${snap.from})` : 'None yet');
@@ -1453,16 +1454,18 @@
     });
     if (!checking()) p.append(el('span'), el('button', { type: 'button', class: 'ghost', text: 'Done', onclick: () => pinKey('done') }), el('span'));
     $('forgot').hidden = !checking();
+    $('bioBtn').hidden = !(checking() && data.pin && data.pin.bio);
   }
   function showLock(mode, msg) {
     if (mode === 'unlock') {
-      closeSheet(); closeForm(); $('confirm').hidden = true;
+      closeSheet(); closeForm(); $('confirm').hidden = true; $('toasts').replaceChildren(); $('viewer').hidden = true;
       const pending = lock.resolve; lock.resolve = null; if (pending) pending(lock.mode.startsWith('set') ? null : false);
     }
     lock.mode = mode; lock.entry = ''; $('lock').hidden = false;
     $('lockTitle').textContent = LOCK_TITLES[mode];
     $('lockMsg').textContent = msg || (mode === 'set1' ? 'Tap Done when finished.' : mode === 'verify' ? 'This keeps your PIN safe if someone else has your phone.' : ' ');
     buildPad(); drawDots();
+    if (mode === 'unlock' && data.pin && data.pin.bio) setTimeout(bioUnlock, 350);
   }
   function hideLock() { $('lock').hidden = true; lock.entry = ''; }
   const finish = v => { const r = lock.resolve; lock.resolve = null; if (r) r(v); };
@@ -1499,7 +1502,7 @@
   }
   async function storePin(pin) {
     const salt = uid(), keep = data.pin || {};
-    data.pin = { salt, len: pin.length, hash: await hashPin(pin, salt), rec: keep.rec || null, q: keep.q || null };
+    data.pin = { salt, len: pin.length, hash: await hashPin(pin, salt), rec: keep.rec || null, q: keep.q || null, bio: keep.bio || null };
     save();
   }
   async function setOrChangePin() {
@@ -1604,6 +1607,57 @@
         el('div', {}, el('button', { class: 'btn primary', type: 'button', text: 'Create recovery code', onclick: () => { closeForm(); makeRecoveryCode(); } }))], 'Later'), 400);
     }
   }
+  /* ---------- fingerprint / face unlock ---------- */
+  // Uses the phone's own sensor through WebAuthn. The phone checks the finger or face; Ledger only
+  // learns "verified" and keeps the credential id. The PIN stays as the fallback.
+  const b64u = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const unb64u = s => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4)), c => c.charCodeAt(0));
+  const randomBytes = n => crypto.getRandomValues(new Uint8Array(n));
+  let bioAvail = null, bioBusy = false;
+  async function bioAvailable() {
+    if (bioAvail !== null) return bioAvail;
+    try { bioAvail = !!(window.PublicKeyCredential && navigator.credentials && await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()); } catch { bioAvail = false; }
+    return bioAvail;
+  }
+  // Called straight from the switch: the phone shows its own fingerprint prompt.
+  async function bioEnable() {
+    if (!data.pin) { toast('Set a PIN first. Fingerprint unlock works alongside it.', 'warn'); return; }
+    if (!(await bioAvailable())) { toast("This phone or browser doesn't offer fingerprint unlock to web apps.", 'warn'); return; }
+    try {
+      const cred = await navigator.credentials.create({ publicKey: {
+        rp: { name: 'Ledger', id: location.hostname },
+        user: { id: randomBytes(16), name: 'Ledger app lock', displayName: 'Ledger app lock' },
+        challenge: randomBytes(32),
+        pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
+        authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'discouraged' },
+        attestation: 'none', timeout: 60000,
+      } });
+      data.pin.bio = { id: b64u(cred.rawId), at: Date.now() }; save(); render(); buzz();
+      toast('Fingerprint unlock is on. Your PIN still works too.');
+    } catch (e) {
+      toast(e && e.name === 'NotAllowedError' ? 'Fingerprint setup was cancelled.' : `Couldn't turn on fingerprint unlock (${(e && e.name) || 'error'}).`, 'warn');
+    }
+  }
+  function bioDisable() { data.pin.bio = null; save(); render(); toast('Fingerprint unlock is off. Use your PIN to open Ledger.'); }
+  async function bioUnlock() {
+    const b = data.pin && data.pin.bio;
+    if (!b || bioBusy || $('lock').hidden || !checking()) return;
+    bioBusy = true;
+    try {
+      const a = await navigator.credentials.get({ publicKey: {
+        challenge: randomBytes(32), rpId: location.hostname, userVerification: 'required', timeout: 60000,
+        allowCredentials: [{ type: 'public-key', id: unb64u(b.id), transports: ['internal'] }],
+      } });
+      const flags = new Uint8Array(a.response.authenticatorData)[32];
+      if (b64u(a.rawId) !== b.id || !(flags & 0x04)) throw new Error('not verified');
+      if ($('lock').hidden) return;
+      lock.fails = 0; const mode = lock.mode; hideLock(); buzz();
+      if (mode === 'verify') finish(true); else afterUnlock();
+    } catch (e) {
+      if (!$('lock').hidden && !(e && (e.name === 'NotAllowedError' || e.name === 'AbortError'))) $('lockMsg').textContent = "Fingerprint didn't work. Use your PIN.";
+    } finally { bioBusy = false; }
+  }
+  $('bioBtn').onclick = bioUnlock;
   $('forgot').onclick = forgotPin;
   document.addEventListener('keydown', e => {
     if ($('lock').hidden || !$('formSheet').hidden || !$('confirm').hidden) return;
@@ -1702,6 +1756,7 @@
     openInfo(`What's new in v${APP_VERSION}`, [
       el('p', { class: 'hint', text: 'All your transactions, budgets, goals and settings carried over.' }),
       el('ul', { class: 'steps' },
+        li('Fingerprint unlock: under More → Passcode & fingerprint, turn it on and open Ledger with your fingerprint (Face ID on iPhone). Your PIN stays as the backup.'),
         li('Google backup is on: sign in with Google under More and Ledger backs up to a private folder in your Google Drive. A new phone can restore everything, receipts included.'),
         li('Receipt photos: take or choose a photo when adding an expense. A paperclip marks entries that have one; tap the photo to see it full size.'),
         li('Backup files now include your receipt photos.'),
@@ -1728,6 +1783,7 @@
   const h = location.hash.slice(1); if (TITLES[h]) ui.tab = h;
   document.querySelectorAll('#bottomNav button svg').forEach(svg => { const w = el('span', { class: 'ico' }); svg.replaceWith(w); w.append(svg); });
   if (cloudOn() && navigator.onLine && (data.cloud || !data.onboarded)) loadGis().catch(() => {});
+  bioAvailable();
   runRecurring(true);
   themeUI();
   render();
