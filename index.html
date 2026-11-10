@@ -19,6 +19,7 @@
 <script>
   // Apply the saved theme before first paint so there is no flash.
   try { var t = localStorage.getItem('ledger-theme'); if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t); } catch (e) {}
+  try { var a = localStorage.getItem('ledger-accent'); if (/^(ocean|sunset|kente|plum)$/.test(a)) document.documentElement.setAttribute('data-accent', a); } catch (e) {}
 </script>
 </head>
 <body>
@@ -69,7 +70,12 @@
     </div>
     <div class="row2">
       <div class="field"><label class="label" for="tDate">Date</label><input id="tDate" type="date" required></div>
-      <div class="field"><label class="label" for="tAmount">Amount</label><input id="tAmount" class="amount" inputmode="decimal" placeholder="0.00" required></div>
+      <div class="field"><label class="label" for="tAmount">Amount</label><input id="tAmount" class="amount" inputmode="none" placeholder="0.00" autocomplete="off" required></div>
+    </div>
+    <div class="calc" id="calc" hidden>
+      <div class="calc-expr num" id="calcExpr" aria-live="polite"></div>
+      <div class="calc-quick" id="calcQuick"></div>
+      <div class="calc-keys" id="calcKeys"></div>
     </div>
     <div class="field" id="fPick"><span class="label">Category</span>
       <button type="button" class="pick-btn" id="pickBtn" aria-haspopup="dialog"><span class="avatar" id="pickAv" aria-hidden="true"></span><span class="pick-txt"><b id="pickName"></b><small id="pickSub"></small></span><span class="chev" aria-hidden="true">›</span></button>

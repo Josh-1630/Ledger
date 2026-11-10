@@ -463,3 +463,68 @@ button { cursor: pointer; }
 .legend-inline .swatch.dash { background: transparent !important; border: 1.5px dashed var(--muted); }
 @media (prefers-reduced-motion: no-preference) { #main.enter .cmp-bars i { animation: grow .8s cubic-bezier(.2,.8,.2,1) both; transform-origin: left center; } }
 .findings li.good, .findings li.bad { color: var(--fg); }
+
+/* ---------- v13: money jar ---------- */
+.hero { box-shadow: 0 10px 30px rgba(29,107,87,.25); box-shadow: 0 10px 30px color-mix(in srgb, var(--hero-a) 35%, transparent); }
+.hero-main { display: grid; grid-template-columns: minmax(0, 1fr) 96px; gap: 10px; align-items: center; }
+.hero-text { display: grid; gap: 6px; min-width: 0; }
+.jar-btn { --liquid: #7fe0b8; --liquid-back: #4fbf94; background: none; border: 0; padding: 0; color: inherit; display: grid; justify-items: center; gap: 0; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.jar-btn.warn { --liquid: #ffd27a; --liquid-back: #e9ac3f; }
+.jar-btn.over { --liquid: #ff9b8b; --liquid-back: #e7604d; }
+.jar { width: 84px; height: auto; display: block; overflow: visible; }
+.jar-glass { fill: rgba(255,255,255,.10); stroke: rgba(255,255,255,.80); stroke-width: 3; }
+.jar-lid { fill: rgba(255,255,255,.88); }
+.jar-shine { fill: none; stroke: rgba(255,255,255,.55); stroke-width: 3.5; stroke-linecap: round; }
+.jar-wave.front path { fill: var(--liquid); }
+.jar-wave.back path { fill: var(--liquid-back); opacity: .75; }
+.jar-bubble { fill: rgba(255,255,255,.55); }
+.jar-pct { font-size: .95rem; font-weight: 600; margin-top: 2px; }
+.jar-cap { font-size: .64rem; opacity: .85; text-transform: uppercase; letter-spacing: .06em; }
+.jar-btn:active .jar { transform: scale(.95); }
+.jar { transition: transform .15s ease; }
+@media (prefers-reduced-motion: no-preference) {
+  .jar-wave.front { animation: wave 3.2s linear infinite; }
+  .jar-wave.back { animation: wave 5.5s linear infinite reverse; }
+  .jar-bubble { animation: bubble 3.6s ease-in infinite; }
+  .jar-bubble.b2 { animation-duration: 4.4s; animation-delay: 1.2s; }
+  .jar-bubble.b3 { animation-duration: 5.2s; animation-delay: 2.3s; }
+}
+@keyframes wave { from { transform: translateX(0); } to { transform: translateX(100px); } }
+@keyframes bubble { 0% { transform: translateY(0); opacity: 0; } 15% { opacity: 1; } 100% { transform: translateY(-62px); opacity: 0; } }
+
+/* ---------- v13: calculator keypad ---------- */
+.sheet .amount { caret-color: transparent; cursor: pointer; }
+.calc { display: grid; gap: 8px; background: var(--sunk); border-radius: 16px; padding: 10px; }
+.calc-expr { min-height: 22px; display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 0 4px; font-size: .95rem; }
+.calc-expr .calc-sum { color: var(--muted); overflow-wrap: anywhere; min-width: 0; }
+.calc-expr b { color: var(--fg); white-space: nowrap; }
+.calc-quick { display: flex; gap: 6px; flex-wrap: wrap; }
+.calc-chip { flex: 1; min-width: 0; min-height: 34px; border-radius: 99px; border: 1px solid var(--line); background: var(--surface); font-size: .82rem; font-weight: 600; color: var(--accent); }
+.calc-keys { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.ck { min-height: 50px; border-radius: 12px; border: 0; background: var(--surface); font-size: 1.35rem; font-family: var(--f-display); font-weight: 500; box-shadow: 0 1px 0 var(--line); transition: transform .08s, background .15s; }
+.ck:active { transform: scale(.94); background: var(--accent-soft); }
+.ck.op { background: var(--accent-soft); color: var(--accent); font-weight: 700; }
+.ck.del, .ck.clr { color: var(--muted); font-size: 1.1rem; }
+.ck.done { grid-column: span 2; background: var(--accent); color: var(--accent-ink); font-size: 1rem; font-weight: 700; }
+
+/* ---------- v13: colour themes ---------- */
+.swatches { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+.acc-sw { display: grid; justify-items: center; gap: 6px; padding: 10px 4px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface); font-size: .74rem; font-weight: 600; color: var(--muted); }
+.acc-sw i { width: 34px; height: 34px; border-radius: 50%; display: block; box-shadow: inset 0 0 0 2px rgba(255,255,255,.35); }
+.acc-sw[aria-pressed="true"] { border-color: var(--accent); color: var(--fg); box-shadow: 0 0 0 2px var(--accent); }
+@media (max-width: 380px) { .swatches { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+:root[data-accent="ocean"] { --accent: #1f5fae; --accent-ink: #ffffff; --accent-soft: #dbe7f7; --hero-a: #1f5fae; --hero-b: #3a8fd0; }
+:root[data-accent="sunset"] { --accent: #c2502a; --accent-ink: #ffffff; --accent-soft: #f9e2d8; --hero-a: #c2502a; --hero-b: #e39a3b; }
+:root[data-accent="kente"] { --accent: #9a6700; --accent-ink: #ffffff; --accent-soft: #f5e9cc; --hero-a: #b07a0a; --hero-b: #1f6b3a; }
+:root[data-accent="plum"] { --accent: #7a3d8f; --accent-ink: #ffffff; --accent-soft: #efdff4; --hero-a: #6b2f80; --hero-b: #b0538f; }
+@media (prefers-color-scheme: dark) {
+  :root[data-accent="ocean"]:not([data-theme="light"]) { --accent: #79acf2; --accent-ink: #0a1a30; --accent-soft: #172a44; --hero-a: #1c3f6e; --hero-b: #122843; }
+  :root[data-accent="sunset"]:not([data-theme="light"]) { --accent: #f2916a; --accent-ink: #2a0f05; --accent-soft: #3a1d14; --hero-a: #6e2c18; --hero-b: #4a2410; }
+  :root[data-accent="kente"]:not([data-theme="light"]) { --accent: #e7b745; --accent-ink: #2a1d00; --accent-soft: #33280f; --hero-a: #5e4100; --hero-b: #123f27; }
+  :root[data-accent="plum"]:not([data-theme="light"]) { --accent: #cf98e3; --accent-ink: #24102c; --accent-soft: #2e1a36; --hero-a: #42204f; --hero-b: #2a1230; }
+}
+:root[data-accent="ocean"][data-theme="dark"] { --accent: #79acf2; --accent-ink: #0a1a30; --accent-soft: #172a44; --hero-a: #1c3f6e; --hero-b: #122843; }
+:root[data-accent="sunset"][data-theme="dark"] { --accent: #f2916a; --accent-ink: #2a0f05; --accent-soft: #3a1d14; --hero-a: #6e2c18; --hero-b: #4a2410; }
+:root[data-accent="kente"][data-theme="dark"] { --accent: #e7b745; --accent-ink: #2a1d00; --accent-soft: #33280f; --hero-a: #5e4100; --hero-b: #123f27; }
+:root[data-accent="plum"][data-theme="dark"] { --accent: #cf98e3; --accent-ink: #24102c; --accent-soft: #2e1a36; --hero-a: #42204f; --hero-b: #2a1230; }
+.hero-main .hero-big { font-size: clamp(1.35rem, 7vw, 2.2rem); white-space: nowrap; overflow-wrap: normal; }

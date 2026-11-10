@@ -4,7 +4,7 @@
   const $ = id => document.getElementById(id);
   const WARN_AT = 0.8;
   const KEY = 'spending-ledger-app-v1';
-  const APP_VERSION = '12';
+  const APP_VERSION = '13';
   const SNAP_KEY = 'spending-ledger-safety-copy';
   const SW = ['--c1', '--c2', '--c3', '--c4', '--c5', '--c6', '--c7', '--c8'];
   const GROUPS = ['Cash', 'Bank account', 'Mobile money', 'Card', 'Savings', 'Loan', 'Other'];
@@ -236,18 +236,128 @@
     const today = data.txs.reduce((s, x) => s + (x.type === 'expense' && x.date === todayISO() ? x.amountCents : 0), 0);
     const pct = budget ? Math.min(100, used / budget * 100) : null;
     const prevName = monthName(shiftMonth(ui.month, -1), { month: 'short' });
+    const pool = carry + t.inc, fill = budget ? (budget - used) / budget : pool > 0 ? (pool - t.exp) / pool : 0, f = Math.max(0, Math.min(1, fill));
+    const jarState = f > .5 ? 'ok' : f > .2 ? 'warn' : 'over';
+    const jarBtn = el('button', { type: 'button', class: `jar-btn ${jarState}`, 'aria-label': `${Math.round(f * 100)}% of your ${budget ? 'budget' : 'money'} left. Tap to shake the jar.`, onclick: jarTap },
+      jarSvg(), el('span', { class: 'jar-pct num', text: `${Math.round(f * 100)}%` }), el('span', { class: 'jar-cap', text: budget ? 'budget left' : 'money left' }));
     h.replaceChildren(...[
       el('div', { class: 'hero-top' }, el('span', { class: 'hero-greet', text: isCur ? greet : monthName(ui.month) }), isCur ? el('span', { class: 'hero-chip num', text: `Today ${money(today)}` }) : null),
+      el('div', { class: 'hero-main' }, el('div', { class: 'hero-text' },
       el('div', { class: 'hero-label', text: data.carryOver === false ? 'Net this month' : 'Money left this month' }),
       el('div', { class: 'hero-big num', 'data-k': 'heroBig', 'data-cents': carry + t.tot, 'data-signed': '1' }),
       el('div', { class: 'hero-row' },
         carry ? el('span', {}, el('i', { class: 'arrow', text: '↪' }), `From ${prevName} `, el('b', { class: 'num', 'data-k': 'heroCarry', 'data-cents': carry })) : null,
         el('span', {}, el('i', { class: 'arrow', text: '↑' }), 'In ', el('b', { class: 'num', 'data-k': 'heroInc', 'data-cents': t.inc })),
-        el('span', {}, el('i', { class: 'arrow', text: '↓' }), 'Out ', el('b', { class: 'num', 'data-k': 'heroExp', 'data-cents': t.exp }))),
+        el('span', {}, el('i', { class: 'arrow', text: '↓' }), 'Out ', el('b', { class: 'num', 'data-k': 'heroExp', 'data-cents': t.exp })))), jarBtn),
       pct != null ? el('div', { class: 'hero-meter', role: 'img', 'aria-label': `${Math.round(pct)}% of budget used` }, el('i', { class: levelOf(used, budget), style: `width:${pct}%` })) : null,
       el('div', { class: 'hero-foot', text: pct != null ? `${money(budget - used)} of your ${money(budget)} budget left to spend` : 'Set limits in Budget to see how much is left to spend.' })].filter(Boolean));
     countUp(h);
+    fillJar(f);
   }
+  /* ---------- the money jar ---------- */
+  // The summary card's jar holds what is left: of the budget when one is set, otherwise of the money
+  // available this month. The liquid ripples, rises or drains to its level, and sloshes when the phone tilts.
+  const JAR_TOP = 26, JAR_BOTTOM = 126;
+  let jarY = JAR_BOTTOM, jarAngle = 0, jarVel = 0, jarTarget = 0, jarLoop = 0, tiltOn = false, tiltSeen = false;
+  const jarSvg = () => svgEl(`<svg class="jar" viewBox="0 0 100 132" aria-hidden="true">
+    <defs><clipPath id="jarClip"><path d="M31 18v8C15 30 11 42 11 58v50c0 11 8 17 19 17h40c11 0 19-6 19-17V58c0-16-4-28-20-32v-8z"/></clipPath></defs>
+    <path class="jar-glass" d="M31 18v8C15 30 11 42 11 58v50c0 11 8 17 19 17h40c11 0 19-6 19-17V58c0-16-4-28-20-32v-8z"/>
+    <g clip-path="url(#jarClip)"><g id="jarTilt"><g id="jarLevel" transform="translate(0 ${JAR_BOTTOM})">
+      <g class="jar-wave back"><path d="M-200 2q25-6 50 0t50 0 50 0 50 0 50 0 50 0 50 0 50 0V160h-400z"/></g>
+      <g class="jar-wave front"><path d="M-200 0q25-7 50 0t50 0 50 0 50 0 50 0 50 0 50 0 50 0V160h-400z"/></g>
+      <circle class="jar-bubble" cx="34" cy="70" r="2.2"/><circle class="jar-bubble b2" cx="58" cy="85" r="1.6"/><circle class="jar-bubble b3" cx="70" cy="60" r="2.6"/>
+    </g></g></g>
+    <path class="jar-shine" d="M22 60c0-9 2-16 8-20"/>
+    <rect class="jar-lid" x="27" y="7" width="46" height="12" rx="4"/>
+  </svg>`);
+  function setJar(y) { jarY = y; const lv = $('jarLevel'); if (lv) lv.setAttribute('transform', `translate(0 ${y.toFixed(1)})`); jarTiltApply(); }
+  function jarTiltApply() { const g = $('jarTilt'); if (g) g.setAttribute('transform', `rotate(${jarAngle.toFixed(2)} 50 ${jarY.toFixed(1)})`); }
+  function jarStep() {
+    jarVel += (jarTarget - jarAngle) * 0.07; jarVel *= 0.88; jarAngle += jarVel; jarTiltApply();
+    jarLoop = Math.abs(jarVel) > 0.02 || Math.abs(jarTarget - jarAngle) > 0.05 ? requestAnimationFrame(jarStep) : 0;
+  }
+  const jarKick = v => { if (reduceMotion.matches) return; jarVel += v; if (!jarLoop) jarLoop = requestAnimationFrame(jarStep); };
+  function onTilt(e) { if (e.gamma == null) return; tiltSeen = true; jarTarget = Math.max(-30, Math.min(30, -e.gamma * 0.8)); if (!jarLoop) jarLoop = requestAnimationFrame(jarStep); }
+  function startTilt() { if (tiltOn || reduceMotion.matches) return; tiltOn = true; window.addEventListener('deviceorientation', onTilt); }
+  async function jarTap() {
+    buzz(); jarKick(9);
+    const D = window.DeviceOrientationEvent;
+    // iPhone only sends tilt after the person allows motion, and only from a tap.
+    if (D && typeof D.requestPermission === 'function' && !tiltSeen) { try { await D.requestPermission(); } catch {} }
+  }
+  if (window.DeviceOrientationEvent) startTilt();
+  function fillJar(f) {
+    const to = JAR_BOTTOM - (JAR_BOTTOM - JAR_TOP) * Math.max(0, Math.min(1, f));
+    const from = shown.has('jarY') ? shown.get('jarY') : JAR_BOTTOM; shown.set('jarY', to);
+    if (reduceMotion.matches || Math.abs(from - to) < .2) { setJar(to); return; }
+    setJar(from); const t0 = performance.now();
+    const tick = now => { const p = Math.min(1, (now - t0) / 1100), e = 1 - Math.pow(1 - p, 3); setJar(from + (to - from) * e); if (p < 1 && $('jarLevel')) requestAnimationFrame(tick); else if (p >= 1) jarKick(from > to ? -5 : 5); };
+    requestAnimationFrame(tick);
+  }
+
+  /* ---------- calculator keypad for amounts ---------- */
+  const calc = { expr: '' };
+  const OPS = '+−×÷';
+  function calcEval(expr) {
+    const toks = (expr.match(/\d+\.?\d*|\.\d+|[+−×÷]/g) || []);
+    while (toks.length && OPS.includes(toks[toks.length - 1])) toks.pop();
+    if (!toks.length || OPS.includes(toks[0])) return null;
+    const a = toks.map(t => OPS.includes(t) ? t : parseFloat(t)), st = [a[0]];
+    for (let k = 1; k < a.length; k += 2) {
+      const op = a[k], v = a[k + 1];
+      if (op === '×') st[st.length - 1] *= v; else if (op === '÷') st[st.length - 1] = v ? st[st.length - 1] / v : NaN; else st.push(op, v);
+    }
+    let r = st[0]; for (let k = 1; k < st.length; k += 2) r = st[k] === '+' ? r + st[k + 1] : r - st[k + 1];
+    return isFinite(r) ? Math.round(r * 100) / 100 : null;
+  }
+  function calcSync() {
+    const r = calcEval(calc.expr), hasOp = /[+−×÷]/.test(calc.expr);
+    if (r != null || !calc.expr) { $('tAmount').value = r != null && r > 0 ? String(r) : calc.expr ? '0' : ''; sheetHint(); }
+    $('calcExpr').replaceChildren(hasOp ? el('span', { class: 'calc-sum', text: calc.expr.replace(/([+−×÷])/g, ' $1 ') }) : el('span', { class: 'hint', text: 'Tip: add amounts up with + − × ÷' }),
+      hasOp && r != null ? el('b', { text: `= ${money(Math.round(r * 100))}` }) : null);
+  }
+  function calcKey(k) {
+    let e = calc.expr; const last = e.slice(-1), cur = (e.split(/[+−×÷]/).pop() || '');
+    if (/\d/.test(k)) { if (/\.\d\d$/.test(cur) || e.length > 40) return; e = (cur === '0' ? e.slice(0, -1) : e) + k; }
+    else if (k === '.') { if (cur.includes('.')) return; e += cur ? '.' : '0.'; }
+    else if (OPS.includes(k)) { if (!e) return; e = OPS.includes(last) ? e.slice(0, -1) + k : e + k; }
+    else if (k === '⌫') e = e.slice(0, -1);
+    else if (k === 'C') e = '';
+    else if (k === '=') { const r = calcEval(e); e = r != null ? String(r) : e; }
+    else if (k === 'done') { const r = calcEval(e); if (r != null) e = String(r); calc.expr = e; calcSync(); calcHide(); return; }
+    calc.expr = e; calcSync(); buzz();
+  }
+  function calcQuick() {
+    const counts = new Map();
+    data.txs.filter(t => t.type === sheet.type).slice(-120).forEach(t => counts.set(t.amountCents, (counts.get(t.amountCents) || 0) + 1));
+    let picks = [...counts.entries()].filter(([, n]) => n >= 2).sort((a, b) => b[1] - a[1] || a[0] - b[0]).slice(0, 4).map(([c]) => c);
+    if (picks.length < 4) picks = picks.concat([500, 1000, 2000, 5000].filter(c => !picks.includes(c))).slice(0, 4);
+    $('calcQuick').replaceChildren(...picks.sort((a, b) => a - b).map(c => el('button', { type: 'button', class: 'calc-chip num', text: money(c), onclick: () => {
+      const v = String(c / 100); calc.expr = calc.expr && OPS.includes(calc.expr.slice(-1)) ? calc.expr + v : v; calcSync(); buzz();
+    } })));
+  }
+  function calcShow() { if (!$('calc').hidden) return; calc.expr = $('tAmount').value.replace(/[^0-9.]/g, ''); calcQuick(); calcSync(); $('calc').hidden = false; }
+  function calcHide() { $('calc').hidden = true; }
+  (() => {
+    const keys = ['7', '8', '9', '÷', '4', '5', '6', '×', '1', '2', '3', '−', '.', '0', '⌫', '+'];
+    $('calcKeys').replaceChildren(...keys.map(k => el('button', { type: 'button', class: `ck${OPS.includes(k) ? ' op' : ''}${k === '⌫' ? ' del' : ''}`, text: k, 'aria-label': { '⌫': 'Delete', '÷': 'Divide', '×': 'Times', '−': 'Minus', '+': 'Plus' }[k] || null, onclick: () => calcKey(k) })),
+      el('button', { type: 'button', class: 'ck clr', text: 'C', 'aria-label': 'Clear', onclick: () => calcKey('C') }),
+      el('button', { type: 'button', class: 'ck op', text: '=', onclick: () => calcKey('=') }),
+      el('button', { type: 'button', class: 'ck done', text: 'Done', onclick: () => calcKey('done') }));
+    $('tAmount').addEventListener('focus', calcShow);
+    $('tAmount').addEventListener('click', calcShow);
+    $('tAmount').addEventListener('input', e => { if (e.isTrusted) calc.expr = $('tAmount').value.replace(/[^0-9.]/g, ''); });
+    ['tDate', 'tNote', 'tAcc', 'tTo', 'tRepeat'].forEach(id => $(id).addEventListener('focus', calcHide));
+  })();
+
+  /* ---------- colour themes ---------- */
+  const ACCENTS = [['jade', 'Jade', '#1d6b57'], ['ocean', 'Ocean', '#1f5fae'], ['sunset', 'Sunset', '#c2502a'], ['kente', 'Kente gold', 'linear-gradient(135deg,#c48a12 0 50%,#1f6b3a 50% 100%)'], ['plum', 'Plum', '#7a3d8f']];
+  const getAccent = () => { const a = lsGet('ledger-accent'); return ACCENTS.some(x => x[0] === a) ? a : 'jade'; };
+  function applyAccent(a) {
+    if (a === 'jade') document.documentElement.removeAttribute('data-accent'); else document.documentElement.setAttribute('data-accent', a);
+    lsSet('ledger-accent', a);
+  }
+
   function burst(type) {
     if (reduceMotion.matches) return;
     const b = el('div', { class: `burst ${type}`, 'aria-hidden': 'true' }, svgEl('<svg viewBox="0 0 52 52"><circle cx="26" cy="26" r="24"/><path d="M15 27l7 7 15-16"/></svg>'));
@@ -1010,7 +1120,10 @@
     box.append(el('div', { class: 'panel' }, el('h2', { text: 'Appearance' }),
       el('div', { class: 'seg', role: 'group', 'aria-label': 'Theme' }, [['system', 'Match phone'], ['light', 'Light'], ['dark', 'Dark']].map(([k, label]) =>
         el('button', { type: 'button', 'aria-pressed': String(th === k), text: label, onclick: () => { applyTheme(k); render(); } }))),
-      el('p', { class: 'hint', text: th === 'system' ? `Following your phone's setting (currently ${darkMQ.matches ? 'dark' : 'light'}).` : `Always ${th}. The sun/moon button at the top switches quickly.` })));
+      el('p', { class: 'hint', text: th === 'system' ? `Following your phone's setting (currently ${darkMQ.matches ? 'dark' : 'light'}).` : `Always ${th}. The sun/moon button at the top switches quickly.` }),
+      el('span', { class: 'label', text: 'Colour' }),
+      el('div', { class: 'swatches', role: 'group', 'aria-label': 'Colour theme' }, ACCENTS.map(([k, label, paint]) => el('button', { type: 'button', class: 'acc-sw', 'aria-pressed': String(getAccent() === k), onclick: () => { applyAccent(k); buzz(); render(); } },
+        el('i', { style: `background:${paint}` }), el('span', { text: label }))))));
     const toggle = (label, desc, on, fn) => el('div', { class: 'row-item' }, el('span', { class: 'grow' }, label, el('div', { class: 'sub', text: desc })),
       el('button', { class: 'switch', type: 'button', role: 'switch', 'aria-checked': String(on), 'aria-label': label, onclick: fn }));
     box.append(el('div', { class: 'panel' }, el('h2', { text: 'Month to month' }), el('div', { class: 'row-list' },
@@ -1191,9 +1304,10 @@
     else { const la = lsGet('ledger-last-acc'); if (la && accOf(la)) $('tAcc').value = la; }
     rcLoadFor(tx || null);
     $('sheet').hidden = false; sheetHint();
-    setTimeout(() => $('tAmount').focus(), 60);
+    calcHide(); calc.expr = '';
+    setTimeout(() => { $('tAmount').focus(); calcShow(); }, 60);
   }
-  const closeSheet = () => { $('sheet').hidden = true; sheet.editing = null; closePicker(); rcReset(); };
+  const closeSheet = () => { $('sheet').hidden = true; sheet.editing = null; closePicker(); rcReset(); calcHide(); };
   $('sheetClose').onclick = closeSheet;
   $('sheet').addEventListener('click', e => { if (e.target === $('sheet')) closeSheet(); });
   $('fab').onclick = () => openTxSheet(null, ui.tab === 'trans' && ui.sub.trans === 'calendar' && ui.calDay ? ui.calDay : null);
@@ -1247,7 +1361,7 @@
       const where = month !== ui.month ? ` to ${monthName(month)}` : '';
       toast(ed ? `Transaction updated${where}.` : freq ? `Saved${where}. Repeats ${FREQS[freq].toLowerCase()}${caught ? `; ${caught} past ${caught === 1 ? 'entry' : 'entries'} filled in` : ''}.` : `Saved ${money(amountCents)} ${type}${where}.`);
     }
-    if (more) { $('tAmount').value = ''; $('tNote').value = ''; $('tRepeat').value = ''; rcReset(); $('tAmount').focus(); sheetHint(); }
+    if (more) { $('tAmount').value = ''; $('tNote').value = ''; $('tRepeat').value = ''; rcReset(); calc.expr = ''; calcSync(); calcQuick(); $('tAmount').focus(); sheetHint(); }
     else closeSheet();
     render();
   }
@@ -2065,6 +2179,9 @@
     openInfo(`What's new in v${APP_VERSION}`, [
       el('p', { class: 'hint', text: 'All your transactions, budgets, goals and settings carried over.' }),
       el('ul', { class: 'steps' },
+        li('The money jar: the summary card shows what is left as a jar of liquid. Tilt your phone and it sloshes; tap it to give it a shake.'),
+        li('Calculator keypad: tap the amount and add things up, like 25 + 12.50. Your most-used amounts are one tap away.'),
+        li('Colour themes: pick Jade, Ocean, Sunset, Kente gold or Plum under More → Appearance.'),
         li('Monthly report: Stats → Report compares this month with last month (month to date and by category), shows the 6-month trend and exports a PDF you can save or share.'),
         li('Fingerprint unlock: under More → Passcode & fingerprint, turn it on and open Ledger with your fingerprint (Face ID on iPhone). Your PIN stays as the backup.'),
         li('Google backup is on: sign in with Google under More and Ledger backs up to a private folder in your Google Drive. A new phone can restore everything, receipts included.'),
