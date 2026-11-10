@@ -25,13 +25,14 @@
 <body>
 <div class="app">
   <header class="top">
-    <h1 id="viewTitle">Transactions</h1>
+    <div class="brand-row"><img class="brand-mark" src="icons/icon-192.png" alt="" width="34" height="34"><h1 id="viewTitle">Ledger</h1></div>
     <div class="top-right">
       <div class="month" id="monthSwitch" role="group" aria-label="Period">
         <button id="prev" aria-label="Previous">‹</button>
         <span id="periodLabel" aria-live="polite"></span>
         <button id="next" aria-label="Next">›</button>
       </div>
+      <button class="theme-btn bell-btn" id="bellBtn" type="button" aria-label="Alerts" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20a2 2 0 0 0 4 0"/></svg><span class="bell-count" id="bellCount" hidden></span></button>
       <button class="theme-btn" id="themeBtn" type="button" aria-label="Switch theme"></button>
     </div>
   </header>
@@ -54,6 +55,8 @@
 <button class="fab" id="fab" aria-label="Add a transaction"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
 
 <nav class="bottom" id="bottomNav" aria-label="Sections">
+  <div class="side-brand"><img src="icons/icon-192.png" alt="" width="40" height="40"><b>Ledger</b></div>
+  <button data-tab="home"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11l8-7 8 7v9h-5v-6H9v6H4z"/></svg><span>Home</span></button>
   <button data-tab="trans"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span>Trans.</span></button>
   <button data-tab="stats"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9h-9z"/><path d="M15 3.5A9 9 0 0 1 20.5 9H15z"/></svg><span>Stats</span></button>
   <button data-tab="budget"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18a8 8 0 1 1 16 0"/><path d="M12 18l4-6"/></svg><span>Budget</span></button>

@@ -4,7 +4,7 @@
   const $ = id => document.getElementById(id);
   const WARN_AT = 0.8;
   const KEY = 'spending-ledger-app-v1';
-  const APP_VERSION = '13';
+  const APP_VERSION = '14';
   const SNAP_KEY = 'spending-ledger-safety-copy';
   const SW = ['--c1', '--c2', '--c3', '--c4', '--c5', '--c6', '--c7', '--c8'];
   const GROUPS = ['Cash', 'Bank account', 'Mobile money', 'Card', 'Savings', 'Loan', 'Other'];
@@ -84,7 +84,7 @@
   }
 
   /* ================= derived ================= */
-  const ui = { tab: 'trans', sub: { trans: 'daily', stats: 'categories' }, month: monthOf(todayISO()), query: '', statsType: 'expense', statsCat: null, calDay: null, editBudget: null, editIncome: null, editAccount: null };
+  const ui = { tab: 'home', cashRange: '6M', sub: { trans: 'daily', stats: 'categories' }, month: monthOf(todayISO()), query: '', statsType: 'expense', statsCat: null, calDay: null, editBudget: null, editIncome: null, editAccount: null };
   const money = c => { try { return new Intl.NumberFormat(undefined, { style: 'currency', currency: data.currency }).format(c / 100); } catch { return (c / 100).toFixed(2); } };
   const compact = c => { try { return new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(c / 100); } catch { return String(Math.round(c / 100)); } };
   const parseAmount = (s, allowNeg) => { const v = parseFloat(String(s).replace(/[^0-9.\-]/g, '')); if (!isFinite(v)) return null; if (!allowNeg && v <= 0) return null; return Math.round(v * 100); };
@@ -174,14 +174,16 @@
   }
 
   /* ================= render ================= */
-  const TITLES = { trans: 'Transactions', stats: 'Stats', budget: 'Budget', goals: 'Goals', more: 'More' };
+  const TITLES = { home: 'Ledger', trans: 'Transactions', stats: 'Stats', budget: 'Budget', goals: 'Goals', more: 'More' };
   const SUBS = { trans: [['daily', 'Daily'], ['calendar', 'Calendar'], ['monthly', 'Monthly']], stats: [['categories', 'Categories'], ['insights', 'Insights'], ['report', 'Report']] };
   const editingInline = () => ui.editBudget || ui.editIncome || ui.editAccount;
 
   function render() {
+    if (ui.tab === 'home') ui.month = monthOf(todayISO());
     const sub = ui.sub[ui.tab], yearView = ui.tab === 'trans' && sub === 'monthly';
     $('viewTitle').textContent = TITLES[ui.tab];
     $('monthSwitch').hidden = !['trans', 'stats', 'budget'].includes(ui.tab);
+    document.querySelector('.top').classList.toggle('is-home', ui.tab === 'home'); bellUI();
     $('periodLabel').textContent = yearView ? ui.month.slice(0, 4) : monthName(ui.month);
     document.querySelectorAll('#bottomNav button').forEach(b => b.setAttribute('aria-current', b.dataset.tab === ui.tab ? 'page' : 'false'));
     const st = $('subtabs'); st.replaceChildren();
@@ -193,13 +195,13 @@
     $('pInc').dataset.cents = t.inc; $('pExp').dataset.cents = t.exp; $('pTot').dataset.cents = t.tot;
     countUp($('period'));
     renderHero(heroOn);
-    $('fab').hidden = ui.tab === 'more';
+    $('fab').hidden = ui.tab === 'more' || ui.tab === 'home';
     $('fab').classList.toggle('pulse', !data.txs.length && data.onboarded);
     renderAlerts(); renderBanner();
     const view = ui.tab === 'trans' ? { daily: viewDaily, calendar: viewCalendar, monthly: viewMonthly }[sub]()
       : ui.tab === 'stats' ? (sub === 'insights' ? viewInsights() : sub === 'report' ? viewReport() : viewStats())
-      : ui.tab === 'budget' ? viewBudget() : ui.tab === 'goals' ? viewGoals() : viewMore();
-    const main = $('main'); main.replaceChildren(view);
+      : ui.tab === 'budget' ? viewBudget() : ui.tab === 'goals' ? viewGoals() : ui.tab === 'home' ? viewHome() : viewMore();
+    const main = $('main'); main.replaceChildren(view); countUp(view);
     const key = `${ui.tab}:${sub || ''}:${ui.month}`;
     if (key !== lastViewKey) {
       lastViewKey = key;
@@ -388,7 +390,7 @@
   let deferredPrompt = null;
   function renderBanner() {
     const box = $('banner'); box.replaceChildren();
-    if (ui.tab !== 'trans') return;
+    if (ui.tab !== 'trans' && ui.tab !== 'home') return;
     if (!data.onboarded) {
       const cur = currencySelect('welcomeCur');
       box.append(el('div', { class: 'alert info' }, el('span', { class: 'sign', text: '→' }), el('div', { class: 'grow' },
@@ -942,6 +944,157 @@
     } catch (e) { $('updating').hidden = true; toast(`Couldn't make the PDF (${e.message}).`, 'over'); }
   }
 
+  /* ---------- Home dashboard ---------- */
+  // A one-screen overview of the current month: greeting card, four headline figures with trends,
+  // cash flow, spending split, findings, goals and recent entries. Every other tab stays as it was.
+  const ICONS = {
+    wallet: '<path d="M4 7h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a1 1 0 0 1-1-1z"/><path d="M4 7l11-3v3"/><circle cx="16" cy="13.5" r="1.3"/>',
+    down: '<path d="M12 4v11M7 11l5 5 5-5M5 20h14"/>', up: '<path d="M12 20V9M7 13l5-5 5 5M5 4h14"/>',
+    piggy: '<path d="M5 11a6 5 0 0 1 11-2h2l1 2v3l-2 1-1 3h-2l-1-2h-4l-1 2H6l-1-3a4 4 0 0 1 0-4z"/><circle cx="14.5" cy="11" r=".7"/>',
+    bulb: '<path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2.1h5c0-.9.4-1.6 1-2.1A6 6 0 0 0 12 3z"/>',
+    check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>', target: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/>',
+    bars: '<path d="M5 20V10M10 20V5M15 20v-7M20 20v-11"/>', donut: '<circle cx="12" cy="12" r="8"/><path d="M12 4v8l6 5"/>', list: '<path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/>',
+  };
+  const ico = (k, cls = '') => svgEl(`<svg class="ico-svg ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[k]}</svg>`);
+  function sparkSvg(vals, color, w = 96, h = 34) {
+    const v = vals.length > 1 ? vals : [0, ...vals, ...(vals.length ? [] : [0])], lo = Math.min(...v), hi = Math.max(...v), rng = hi - lo || 1;
+    const pts = v.map((x, i) => [(i / (v.length - 1)) * (w - 4) + 2, h - 3 - ((x - lo) / rng) * (h - 8)]);
+    const line = pts.map(p => p.map(n => n.toFixed(1)).join(',')).join(' '), id = 'sp' + Math.random().toString(36).slice(2, 7);
+    const last = pts[pts.length - 1];
+    return svgEl(`<svg class="spark" viewBox="0 0 ${w} ${h}" aria-hidden="true"><defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${color}" stop-opacity=".35"/><stop offset="1" stop-color="${color}" stop-opacity="0"/></linearGradient></defs><polygon points="2,${h} ${line} ${w - 2},${h}" fill="url(#${id})"/><polyline points="${line}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/><circle cx="${last[0]}" cy="${last[1]}" r="2.6" fill="${color}"/></svg>`);
+  }
+  const heroArt = () => svgEl(`<svg class="hero-art" viewBox="0 0 120 110" aria-hidden="true">
+    <g class="coins">${[0, 1, 2, 3, 4, 5].map(i => `<g transform="translate(0 ${-i * 9})"><ellipse cx="58" cy="96" rx="30" ry="8" fill="#b8860b"/><rect x="28" y="88" width="60" height="8" fill="#d4a017"/><ellipse cx="58" cy="88" rx="30" ry="8" fill="#f2c94c"/><ellipse cx="58" cy="88" rx="21" ry="5" fill="none" stroke="#d4a017" stroke-width="1.4"/></g>`).join('')}
+      <g transform="translate(34 6)"><ellipse cx="58" cy="96" rx="18" ry="5" fill="#b8860b"/><rect x="40" y="91" width="36" height="5" fill="#d4a017"/><ellipse cx="58" cy="91" rx="18" ry="5" fill="#f2c94c"/></g></g>
+    <g class="sprout"><path d="M58 40c0-12 1-20 3-26" stroke="#2f7d4f" stroke-width="3" fill="none" stroke-linecap="round"/>
+      <path d="M60 22c-14-2-22-12-22-20 12 0 22 8 22 20z" fill="#5fbf7f"/><path d="M61 30c10-10 24-12 32-8-6 10-18 14-32 8z" fill="#3fa565"/><path d="M60 22c-8-6-12-12-12-18" stroke="#2f7d4f" stroke-width="1.2" fill="none"/></g>
+  </svg>`);
+  function cashBuckets(range) {
+    const m = monthOf(todayISO());
+    if (range === '1M') {
+      const mt = monthTxs(m), out = [];
+      for (let w = 0; w * 7 < daysIn(m); w++) { const a = w * 7 + 1, b = Math.min(daysIn(m), a + 6); out.push({ label: `${a}-${b}`, ...totals(mt.filter(t => +t.date.slice(8) >= a && +t.date.slice(8) <= b)) }); }
+      return out;
+    }
+    const n = { '3M': 3, '6M': 6, '1Y': 12 }[range] || 6, out = [];
+    for (let i = n - 1; i >= 0; i--) { const k = shiftMonth(m, -i); out.push({ label: monthName(k, { month: n > 6 ? 'narrow' : 'short' }), ...totals(monthTxs(k)) }); }
+    return out;
+  }
+  function svgCashflow(range) {
+    const B = cashBuckets(range), W = 340, H = 190, L = 40, Rm = 6, T = 10, Bm = 22, n = B.length;
+    const { step, top } = niceScale(Math.max(1, ...B.map(b => Math.max(b.inc, b.exp))));
+    const slot = (W - L - Rm) / n, bw = Math.min(16, slot * .32), y = v => T + (H - T - Bm) * (1 - v / top);
+    let s = '';
+    for (let i = 0; i <= 4; i++) s += `<line class="gl" x1="${L}" x2="${W - Rm}" y1="${y(step * i)}" y2="${y(step * i)}"/><text x="${L - 5}" y="${y(step * i) + 3}" text-anchor="end">${compact(step * i)}</text>`;
+    const tops = [];
+    B.forEach((b, i) => {
+      const cx = L + i * slot + slot / 2;
+      s += `<rect x="${cx - bw - 1}" y="${y(b.inc)}" width="${bw}" height="${H - Bm - y(b.inc)}" rx="3" fill="var(--accent)"><title>${b.label}: income ${money(b.inc)}</title></rect>`;
+      s += `<rect x="${cx + 1}" y="${y(b.exp)}" width="${bw}" height="${H - Bm - y(b.exp)}" rx="3" fill="var(--ink2)"><title>${b.label}: spending ${money(b.exp)}</title></rect>`;
+      s += `<text x="${cx}" y="${H - 6}" text-anchor="middle">${b.label}</text>`;
+      tops.push(`${cx - bw / 2 - 1},${y(b.inc)}`);
+    });
+    if (tops.length > 1) s += `<polyline points="${tops.join(' ')}" fill="none" stroke="var(--accent)" stroke-width="1.6" stroke-opacity=".55"/>` + tops.map(p => `<circle cx="${p.split(',')[0]}" cy="${p.split(',')[1]}" r="2.6" fill="var(--surface)" stroke="var(--accent)" stroke-width="1.6"/>`).join('');
+    return svgEl(`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Income and spending, ${range}">${s}</svg>`);
+  }
+  function alertItems() {
+    const m = monthOf(todayISO()), mt = monthTxs(m), items = [];
+    data.categories.forEach(c => { const lim = limitFor(c, m); if (lim == null) return; const sp = spentIn(mt, c.id), lv = levelOf(sp, lim);
+      if (lv === 'over') items.push({ tone: 'over', text: `${c.name} is over budget by ${money(sp - lim)}.`, go: 'budget' });
+      else if (lv === 'warn') items.push({ tone: 'warn', text: `${c.name} has used ${Math.round(sp / lim * 100)}% of its budget.`, go: 'budget' }); });
+    if (data.cloud && data.cloud.dirty && (!data.cloud.lastAt || Date.now() - data.cloud.lastAt > 864e5)) items.push({ tone: 'info', text: `Google backup is ${agoText(data.cloud.lastAt)} old. Tap to back up now.`, act: backupNow });
+    else if (!data.cloud && data.txs.length >= 15 && (!data.lastBackup || Date.now() - data.lastBackup > 30 * 864e5)) items.push({ tone: 'info', text: 'You have no recent backup.', go: 'more' });
+    data.goals.forEach(g => { if (g.deadline && goalSaved(g) < g.targetCents) { const d = Math.ceil((dateObj(g.deadline) - dateObj(todayISO())) / 864e5); if (d >= 0 && d <= 14) items.push({ tone: 'warn', text: `${g.name} is due in ${d} day${d === 1 ? '' : 's'} with ${money(g.targetCents - goalSaved(g))} to go.`, go: 'goals' }); } });
+    return items;
+  }
+  function bellUI() {
+    const n = alertItems().length; $('bellBtn').hidden = ui.tab !== 'home';
+    $('bellCount').textContent = n > 9 ? '9+' : String(n); $('bellCount').hidden = !n;
+    $('bellBtn').setAttribute('aria-label', n ? `${n} alert${n === 1 ? '' : 's'}` : 'No alerts');
+  }
+  function openAlerts() {
+    const items = alertItems();
+    openInfo('Alerts', [items.length ? el('div', { class: 'alert-list' }, items.map(a => el('button', { type: 'button', class: `alert-item ${a.tone}`, onclick: () => { closeForm(); if (a.act) a.act(); else setTab(a.go); } },
+      el('i', { class: 'dot' }), el('span', { text: a.text }), el('span', { class: 'chev', text: '›' })))) : el('div', { class: 'empty-state center' }, el('div', { text: 'All clear. No budgets are near their limit and your backup is up to date.' }))]);
+  }
+  $('bellBtn').onclick = openAlerts;
+  function setTab(t) {
+    ui.tab = t; ui.editBudget = ui.editIncome = ui.editAccount = null;
+    if (t !== 'home') ui.month = monthOf(todayISO());
+    try { history.replaceState(null, '', '#' + t); } catch {}
+    render(); window.scrollTo({ top: 0 });
+  }
+  function viewHome() {
+    const m = monthOf(todayISO()), R = reportModel(m), mt = monthTxs(m);
+    const hr = new Date().getHours(), greet = hr < 12 ? 'Good morning' : hr < 17 ? 'Good afternoon' : 'Good evening';
+    const name = ((data.profile && data.profile.name) || '').trim();
+    // Balance now against the balance on the same day last month.
+    const balance = carryIn(m) + totals(mt).tot, prevSameBal = carryIn(R.p) + R.same.tot;
+    const balPct = prevSameBal ? Math.round((balance - prevSameBal) / Math.abs(prevSameBal) * 100) : null;
+    const balTrend = R.trend.slice(0, -1).map(t => carryIn(shiftMonth(t.m, 1))).concat(balance);
+    const msg = !R.cur.exp && !R.cur.inc ? 'Add your first entries for this month to see how you are doing.' : R.same.exp && R.cur.exp <= R.same.exp ? `You are spending less than last month. Keep it up!` : R.same.exp ? `Spending is ${Math.round((R.cur.exp - R.same.exp) / R.same.exp * 100)}% higher than this time last month.` : 'Your month at a glance.';
+    const hero = el('section', { class: 'home-hero' },
+      el('div', { class: 'hh-text' },
+        el('h2', { text: `${greet}${name ? `, ${name}` : ''}!` }), el('p', { class: 'hh-msg', text: msg }),
+        el('div', { class: 'hh-label', text: data.carryOver === false ? 'Net this month' : 'Money left' }),
+        el('div', { class: 'hh-big num', 'data-k': 'homeBal', 'data-cents': balance, 'data-signed': '1' }),
+        balPct != null ? el('div', { class: `hh-delta ${balPct >= 0 ? 'up' : 'down'}`, text: `${balPct >= 0 ? '↑' : '↓'} ${Math.abs(balPct)}% vs this time last month` }) : null,
+        el('button', { type: 'button', class: 'hh-btn', onclick: () => { ui.sub.stats = 'report'; setTab('stats'); } }, 'View report', el('span', { text: '→' }))),
+      heroArt(), el('div', { class: 'hh-spark' }, sparkSvg(balTrend, 'rgba(160,255,200,.95)', 240, 60)));
+    // four headline figures with six-month trends
+    const months = R.trend;
+    const rateOf = t => t.inc ? Math.round((t.inc - t.exp) / t.inc * 100) : 0;
+    const kpi = (icon, tint, label, value, delta, tone, series, color) => el('div', { class: 'hk' },
+      el('span', { class: `hk-ico ${tint}` }, ico(icon)), el('div', { class: 'hk-txt' }, el('span', { class: 'hk-label', text: label }), el('b', { class: 'hk-val num', text: value }),
+        delta ? el('span', { class: `hk-delta ${tone}`, text: delta }) : null), sparkSvg(series, color));
+    const pctD = (a, b, upGood) => { if (!b) return [null, 'flat']; const v = Math.round((a - b) / Math.abs(b) * 100); return [`${v >= 0 ? '↑' : '↓'} ${Math.abs(v)}%`, v === 0 ? 'flat' : (v > 0) === upGood ? 'good' : 'bad']; };
+    const [dI, tI] = pctD(R.cur.inc, R.same.inc, true), [dE, tE] = pctD(R.cur.exp, R.same.exp, false);
+    const rNow = R.cur.inc ? Math.round((R.cur.inc - R.cur.exp) / R.cur.inc * 100) : null, rThen = R.same.inc ? Math.round((R.same.inc - R.same.exp) / R.same.inc * 100) : null;
+    const kpis = el('section', { class: 'home-kpis' },
+      kpi('wallet', 't-acc', 'Balance', money(balance), balPct != null ? `${balPct >= 0 ? '↑' : '↓'} ${Math.abs(balPct)}%` : null, balPct == null ? 'flat' : balPct >= 0 ? 'good' : 'bad', balTrend, 'var(--accent)'),
+      kpi('down', 't-inc', 'Income', money(R.cur.inc), dI, tI, months.map(t => t.inc), 'var(--inc)'),
+      kpi('up', 't-exp', 'Expenses', money(R.cur.exp), dE, tE, months.map(t => t.exp), 'var(--exp)'),
+      kpi('piggy', 't-acc', 'Savings rate', rNow == null ? '–' : `${rNow}%`, rNow != null && rThen != null ? `${rNow >= rThen ? '↑' : '↓'} ${Math.abs(rNow - rThen)} pts` : null, rNow == null || rThen == null ? 'flat' : rNow >= rThen ? 'good' : 'bad', months.map(rateOf), 'var(--accent)'));
+    // cash flow
+    const range = ui.cashRange || '6M';
+    const cash = el('section', { class: 'panel home-card hc-cash' }, el('div', { class: 'panel-head' }, el('h2', { class: 'hc-title' }, ico('bars'), 'Cash flow'),
+      el('div', { class: 'seg mini' }, ['1M', '3M', '6M', '1Y'].map(r => el('button', { type: 'button', 'aria-pressed': String(r === range), text: r, onclick: () => { ui.cashRange = r; render(); } })))),
+      legend([['var(--accent)', 'Income'], ['var(--ink2)', 'Spending']]), el('div', { class: 'chart' }, svgCashflow(range)));
+    // spending breakdown
+    const parts = R.cats.filter(r => r.cur > 0), topP = parts.slice(0, 5), other = parts.slice(5).reduce((s, r) => s + r.cur, 0), tot = parts.reduce((s, r) => s + r.cur, 0);
+    const rows = topP.map(r => ({ name: r.name, v: r.cur, color: `var(${r.color})` })).concat(other ? [{ name: 'Others', v: other, color: 'var(--muted)' }] : []);
+    let donutEl;
+    if (tot) { const Rr = 62, C = 2 * Math.PI * Rr; let off = 0, arcs = ''; rows.forEach(r => { const len = r.v / tot * C; arcs += `<circle cx="80" cy="80" r="${Rr}" fill="none" stroke="${r.color}" stroke-width="22" stroke-dasharray="${Math.max(0, len - 1.5)} ${C}" stroke-dashoffset="${-off}"/>`; off += len; });
+      donutEl = svgEl(`<svg class="donut" viewBox="0 0 160 160" role="img" aria-label="Spending by category this month"><g transform="rotate(-90 80 80)"><circle cx="80" cy="80" r="${Rr}" fill="none" stroke="var(--sunk)" stroke-width="22"/>${arcs}</g><text x="80" y="78" text-anchor="middle" font-size="15" font-weight="700">${compact(tot)}</text><text class="sub" x="80" y="96" text-anchor="middle" font-size="10">spent</text></svg>`); }
+    const breakdown = el('section', { class: 'panel home-card hc-donut' }, el('div', { class: 'panel-head' }, el('h2', { class: 'hc-title' }, ico('donut'), 'Spending breakdown'), el('button', { class: 'linkbtn', text: 'View all →', onclick: () => { ui.sub.stats = 'categories'; setTab('stats'); } })),
+      tot ? el('div', { class: 'hd-body' }, donutEl, el('div', { class: 'hd-legend' }, rows.map(r => el('div', { class: 'hd-row' }, el('i', { class: 'swatch', style: `background:${r.color};border-radius:50%` }), el('span', { class: 'nm', text: r.name }), el('b', { class: 'num', text: `${(r.v / tot * 100).toFixed(1)}%` })))))
+        : el('div', { class: 'empty-state', text: 'No spending yet this month.' }));
+    // insights
+    const insights = el('section', { class: 'panel home-card hc-insights' }, el('h2', { class: 'hc-title' }, ico('bulb'), 'Financial insights'),
+      el('ul', { class: 'hi-list' }, R.findings.slice(0, 3).map(f => el('li', { class: f.tone }, ico('check', 'tick'), el('span', { text: f.text })))),
+      el('button', { class: 'btn primary hi-btn', type: 'button', text: 'View report →', onclick: () => { ui.sub.stats = 'report'; setTab('stats'); } }));
+    // goals
+    const goals = el('section', { class: 'panel home-card hc-goals' }, el('div', { class: 'panel-head' }, el('h2', { class: 'hc-title' }, ico('target'), 'Savings goals'), el('button', { class: 'linkbtn', text: 'View all →', onclick: () => setTab('goals') })),
+      data.goals.length ? el('div', { class: 'hg-list' }, data.goals.slice(0, 3).map(g => { const sv = goalSaved(g), p = g.targetCents ? Math.min(1, sv / g.targetCents) : 0;
+        return el('div', { class: 'hg' }, el('span', { class: 'hg-ico', style: `--c:var(${g.color})` }, (g.name.trim()[0] || '?').toUpperCase()),
+          el('div', { class: 'hg-main' }, el('div', { class: 'hg-top' }, el('b', { text: g.name }), el('span', { class: 'num', text: `${Math.round(p * 100)}%` })),
+            el('div', { class: 'bar' }, el('i', { style: `width:${p * 100}%;background:var(${g.color})` })),
+            el('div', { class: 'hg-sub num' }, `${money(sv)} of ${money(g.targetCents)}`, g.deadline ? el('span', { text: `Target ${monthName(monthOf(g.deadline), { month: 'short', year: 'numeric' })}` }) : null))); }))
+        : el('div', { class: 'empty-state' }, el('div', { text: 'Plan. Save. Grow. Set a goal and Ledger works out what to put aside each week.' }), el('button', { class: 'btn small', text: 'Create a goal', onclick: () => setTab('goals') })));
+    // recent transactions
+    const recent = data.txs.slice().sort((a, b) => b.date.localeCompare(a.date) || (b.createdAt || 0) - (a.createdAt || 0)).slice(0, 5);
+    const recentEl = el('section', { class: 'panel home-card hc-recent' }, el('div', { class: 'panel-head' }, el('h2', { class: 'hc-title' }, ico('list'), 'Recent transactions'), el('button', { class: 'linkbtn', text: 'View all →', onclick: () => { ui.sub.trans = 'daily'; setTab('trans'); } })),
+      recent.length ? el('div', { class: 'hr-list' }, recent.map(x => { const c = catOf(x), sb = subOf(x), sign = x.type === 'income' ? '+' : x.type === 'expense' ? '−' : '';
+        const cls = x.type === 'income' ? 'inc' : x.type === 'expense' ? 'exp' : 'xfer', color = x.type === 'transfer' ? 'var(--xfer)' : c ? `var(${c.color})` : 'var(--muted)';
+        return el('button', { type: 'button', class: 'hr', onclick: () => openTxSheet(x) }, el('span', { class: 'avatar', style: `--c:${color}`, text: x.type === 'transfer' ? '⇄' : ((c ? c.name : '?').trim()[0] || '?').toUpperCase() }),
+          el('span', { class: 'hr-main' }, el('b', { text: x.note || (sb ? sb.name : c ? c.name : 'Transfer') }), el('span', { text: [c && c.name, sb && sb.name].filter(Boolean).join(' · ') || (x.type === 'transfer' ? 'Transfer' : 'Uncategorised') })),
+          el('span', { class: 'hr-right' }, el('b', { class: `num ${cls}`, text: `${sign}${money(x.amountCents)}` }), el('span', { text: niceDate(x.date) }))); }))
+        : el('div', { class: 'empty-state', text: 'Nothing recorded yet.' }));
+    const add = el('button', { type: 'button', class: 'btn primary home-add', onclick: () => openTxSheet(null) }, el('span', { class: 'plus', text: '+' }), 'Add transaction');
+    loadPdfLib().catch(() => {});
+    return el('div', { class: 'stack home-grid' }, hero, kpis, add, cash, breakdown, insights, goals, recentEl);
+  }
+
   /* ---------- Budget ---------- */
   function viewBudget() {
     const mt = monthTxs(), capped = data.categories.filter(c => c.limitCents != null);
@@ -1121,6 +1274,8 @@
       el('div', { class: 'seg', role: 'group', 'aria-label': 'Theme' }, [['system', 'Match phone'], ['light', 'Light'], ['dark', 'Dark']].map(([k, label]) =>
         el('button', { type: 'button', 'aria-pressed': String(th === k), text: label, onclick: () => { applyTheme(k); render(); } }))),
       el('p', { class: 'hint', text: th === 'system' ? `Following your phone's setting (currently ${darkMQ.matches ? 'dark' : 'light'}).` : `Always ${th}. The sun/moon button at the top switches quickly.` }),
+      el('div', { class: 'field', style: 'max-width:320px' }, el('label', { class: 'label', for: 'profName', text: 'Your name (for the greeting on Home)' }),
+        (() => { const i = el('input', { id: 'profName', maxlength: 30, placeholder: 'e.g. Joshua', autocomplete: 'given-name' }); i.value = (data.profile && data.profile.name) || ''; i.onchange = () => { data.profile = { ...(data.profile || {}), name: i.value.trim() }; save(); toast(i.value.trim() ? `Hello, ${i.value.trim()}!` : 'Name removed.'); }; return i; })()),
       el('span', { class: 'label', text: 'Colour' }),
       el('div', { class: 'swatches', role: 'group', 'aria-label': 'Colour theme' }, ACCENTS.map(([k, label, paint]) => el('button', { type: 'button', class: 'acc-sw', 'aria-pressed': String(getAccent() === k), onclick: () => { applyAccent(k); buzz(); render(); } },
         el('i', { style: `background:${paint}` }), el('span', { text: label }))))));
@@ -2179,6 +2334,9 @@
     openInfo(`What's new in v${APP_VERSION}`, [
       el('p', { class: 'hint', text: 'All your transactions, budgets, goals and settings carried over.' }),
       el('ul', { class: 'steps' },
+        li('New Home dashboard: greeting, money left with its trend, income, spending and savings rate, a cash-flow chart (1M to 1Y), spending breakdown, insights, goals and recent entries.'),
+        li('A bell on Home gathers alerts: budgets near or over their limit, goals due soon and backups.'),
+        li('On a computer or tablet the tabs become a sidebar and Home spreads into columns. Add your name for the greeting under More → Appearance.'),
         li('The money jar: the summary card shows what is left as a jar of liquid. Tilt your phone and it sloshes; tap it to give it a shake.'),
         li('Calculator keypad: tap the amount and add things up, like 25 + 12.50. Your most-used amounts are one tap away.'),
         li('Colour themes: pick Jade, Ocean, Sunset, Kente gold or Plum under More → Appearance.'),
