@@ -4,7 +4,7 @@
   const $ = id => document.getElementById(id);
   const WARN_AT = 0.8;
   const KEY = 'spending-ledger-app-v1';
-  const APP_VERSION = '14';
+  const APP_VERSION = '15';
   const SNAP_KEY = 'spending-ledger-safety-copy';
   const SW = ['--c1', '--c2', '--c3', '--c4', '--c5', '--c6', '--c7', '--c8'];
   const GROUPS = ['Cash', 'Bank account', 'Mobile money', 'Card', 'Savings', 'Loan', 'Other'];
@@ -1046,7 +1046,7 @@
     const rateOf = t => t.inc ? Math.round((t.inc - t.exp) / t.inc * 100) : 0;
     const kpi = (icon, tint, label, value, delta, tone, series, color) => el('div', { class: 'hk' },
       el('span', { class: `hk-ico ${tint}` }, ico(icon)), el('div', { class: 'hk-txt' }, el('span', { class: 'hk-label', text: label }), el('b', { class: 'hk-val num', text: value }),
-        delta ? el('span', { class: `hk-delta ${tone}`, text: delta }) : null), sparkSvg(series, color));
+        delta ? el('span', { class: `hk-delta ${tone}`, text: delta }) : null), sparkSvg(series, color, 180, 26));
     const pctD = (a, b, upGood) => { if (!b) return [null, 'flat']; const v = Math.round((a - b) / Math.abs(b) * 100); return [`${v >= 0 ? '↑' : '↓'} ${Math.abs(v)}%`, v === 0 ? 'flat' : (v > 0) === upGood ? 'good' : 'bad']; };
     const [dI, tI] = pctD(R.cur.inc, R.same.inc, true), [dE, tE] = pctD(R.cur.exp, R.same.exp, false);
     const rNow = R.cur.inc ? Math.round((R.cur.inc - R.cur.exp) / R.cur.inc * 100) : null, rThen = R.same.inc ? Math.round((R.same.inc - R.same.exp) / R.same.inc * 100) : null;
@@ -2334,6 +2334,7 @@
     openInfo(`What's new in v${APP_VERSION}`, [
       el('p', { class: 'hint', text: 'All your transactions, budgets, goals and settings carried over.' }),
       el('ul', { class: 'steps' },
+        li('Home looks tidier: compact figure tiles, amounts in the regular bold font, and a slimmer tab bar.'),
         li('New Home dashboard: greeting, money left with its trend, income, spending and savings rate, a cash-flow chart (1M to 1Y), spending breakdown, insights, goals and recent entries.'),
         li('A bell on Home gathers alerts: budgets near or over their limit, goals due soon and backups.'),
         li('On a computer or tablet the tabs become a sidebar and Home spreads into columns. Add your name for the greeting under More → Appearance.'),
